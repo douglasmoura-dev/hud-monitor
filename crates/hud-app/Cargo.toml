@@ -1,0 +1,10 @@
+[package]
+name = "hud-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hud-core = { path = "../hud-core" }
+thiserror = "2"
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "renderer-software", "backend-winit"] }
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }
