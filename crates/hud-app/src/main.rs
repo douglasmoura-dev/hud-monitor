@@ -3,12 +3,10 @@
 mod store;
 mod winffi;
 
-use hud_core::position::{clamp_to_screen, first_run_position, Point, Size};
+use hud_core::config::{Config, HUD_SIZE};
+use hud_core::position::{clamp_to_screen, Point, Size};
 use slint::{ComponentHandle, PhysicalPosition};
-use std::rc::Rc;
-
-const WINDOW_WIDTH: f32 = 320.0;
-const WINDOW_HEIGHT: f32 = 200.0;
+use std::{cell::RefCell, rc::Rc};
 
 slint::slint! {
     export component Hud inherits Window {
@@ -60,18 +58,10 @@ enum AppError {
     Window(#[from] slint::PlatformError),
 }
 
-fn start_position(path: &std::path::Path, window: Size) -> Result<Point, AppError> {
-    let screen = winffi::screen_size();
-    Ok(match store::load(path)? {
-        Some(saved) => clamp_to_screen(saved, window, screen),
-        None => first_run_position(screen, window),
-    })
-}
-
-fn save_position(hud: &Hud, path: &std::path::Path) {
+fn save_position(hud: &Hud, path: &std::path::Path, config: &mut Config) {
     let p = hud.window().position();
-    if let Err(e) = store::save(path, Point { x: p.x, y: p.y }) {
-        eprintln!("hud-monitor: could not save position: {e}");
+    if let Err(e) = store::save_hud_position(path, config, Point { x: p.x, y: p.y }) {
+        eprintln!("hud-monitor: could not save config: {e}");
     }
 }
 
@@ -80,10 +70,16 @@ fn run() -> Result<(), AppError> {
     let hud = Hud::new()?;
     let scale = hud.window().scale_factor();
     let size = Size {
-        width: (WINDOW_WIDTH * scale).round() as i32,
-        height: (WINDOW_HEIGHT * scale).round() as i32,
+        width: (HUD_SIZE.width as f32 * scale).round() as i32,
+        height: (HUD_SIZE.height as f32 * scale).round() as i32,
     };
-    let pos = start_position(&path, size)?;
+    let screen = winffi::screen_size();
+    let config = Rc::new(RefCell::new(store::load_or_first_run(&path, screen)?));
+    let saved = Point {
+        x: config.borrow().hud.x,
+        y: config.borrow().hud.y,
+    };
+    let pos = clamp_to_screen(saved, size, screen);
     hud.window()
         .set_position(PhysicalPosition::new(pos.x, pos.y));
 
@@ -97,16 +93,16 @@ fn run() -> Result<(), AppError> {
                 .set_position(PhysicalPosition::new(p.x + dx, p.y + dy));
         }
     });
-    let (weak, saved_to) = (hud.as_weak(), path.clone());
+    let (weak, saved_to, cfg) = (hud.as_weak(), path.clone(), config.clone());
     hud.on_released(move || {
         if let Some(hud) = weak.upgrade() {
-            save_position(&hud, &saved_to);
+            save_position(&hud, &saved_to, &mut cfg.borrow_mut());
         }
     });
     let weak = hud.as_weak();
     hud.on_quit(move || {
         if let Some(hud) = weak.upgrade() {
-            save_position(&hud, &path);
+            save_position(&hud, &path, &mut config.borrow_mut());
             let _ = hud.hide();
         }
     });
