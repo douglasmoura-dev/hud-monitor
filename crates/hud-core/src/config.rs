@@ -113,6 +113,11 @@ fn check_threshold(t: Threshold, field: &'static str) -> Result<(), ConfigError>
     }
 }
 
+/// `Mod+Mod+Key` shape: at least one `+`-separated part and none empty.
+fn is_hotkey(text: &str) -> bool {
+    text.split('+').all(|part| !part.trim().is_empty())
+}
+
 impl Config {
     /// Explicit initial config: HUD top-right, mini bar just below it (hidden).
     pub fn first_run(screen: Size) -> Config {
@@ -177,9 +182,7 @@ impl Config {
         check_threshold(self.thresholds.ram_percent, "thresholds.ram_percent")?;
         check_threshold(self.thresholds.temp_c, "thresholds.temp_c")?;
         check_threshold(self.thresholds.ping_ms, "thresholds.ping_ms")?;
-        if self.hotkeys.toggle_hud.trim().is_empty()
-            || self.hotkeys.toggle_minibar.trim().is_empty()
-        {
+        if !is_hotkey(&self.hotkeys.toggle_hud) || !is_hotkey(&self.hotkeys.toggle_minibar) {
             return Err(invalid("hotkeys"));
         }
         self.validate_profiles()
@@ -187,9 +190,14 @@ impl Config {
 
     fn validate_profiles(&self) -> Result<(), ConfigError> {
         for (i, p) in self.profiles.iter().enumerate() {
-            let duplicate = self.profiles[..i].iter().any(|q| q.name == p.name);
-            if p.name.trim().is_empty() || p.items.is_empty() || duplicate {
-                return Err(invalid("profiles"));
+            if p.name.trim().is_empty() {
+                return Err(invalid("profiles.name"));
+            }
+            if p.items.is_empty() {
+                return Err(invalid("profiles.items"));
+            }
+            if self.profiles[..i].iter().any(|q| q.name == p.name) {
+                return Err(invalid("profiles.duplicate"));
             }
         }
         match &self.active_profile {
@@ -372,7 +380,19 @@ mod tests {
         c.profiles[1].name = "Trabalho".into();
         assert!(matches!(
             c.validate(),
-            Err(ConfigError::Invalid { field: "profiles" })
+            Err(ConfigError::Invalid {
+                field: "profiles.duplicate"
+            })
+        ));
+    }
+
+    #[test]
+    fn malformed_hotkey_is_invalid() {
+        let mut c = Config::first_run(SCREEN);
+        c.hotkeys.toggle_hud = "Ctrl+".into();
+        assert!(matches!(
+            c.validate(),
+            Err(ConfigError::Invalid { field: "hotkeys" })
         ));
     }
 
