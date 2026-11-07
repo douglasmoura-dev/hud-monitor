@@ -8,6 +8,8 @@ pub const FREQ_UNAVAILABLE: &str = "frequência indisponível";
 pub const SAVE_FAILED: &str = "não foi possível salvar o total do dia";
 pub const PING_UNAVAILABLE: &str = "sem resposta";
 const SECS_PER_DAY: u32 = 86_400;
+/// Upper bound between clock reads, so DST or manual clock changes are picked up.
+const RECHECK_SECS: u32 = 60;
 const SAVE_EVERY_TICKS: u32 = 10;
 
 /// A value that is either known or explicitly unavailable (shown as `—`).
@@ -130,7 +132,7 @@ impl Snapshot {
 #[error("{0}")]
 pub struct DayStoreError(pub String);
 
-/// Midnight detection without reading the clock every tick.
+/// Midnight detection that reads the clock at midnight and at most once a minute otherwise.
 pub struct DayClock {
     date: Date,
     rollover_at: Duration,
@@ -140,9 +142,10 @@ impl DayClock {
     /// `mono` is a monotonic time since process start; `read` returns local date and seconds into the day.
     pub fn new(mono: Duration, read: impl FnOnce() -> (Date, u32)) -> Self {
         let (date, secs) = read();
+        let to_midnight = SECS_PER_DAY.saturating_sub(secs);
         Self {
             date,
-            rollover_at: mono + Duration::from_secs(u64::from(SECS_PER_DAY.saturating_sub(secs))),
+            rollover_at: mono + Duration::from_secs(u64::from(to_midnight.min(RECHECK_SECS))),
         }
     }
 
@@ -549,6 +552,14 @@ mod tests {
         });
         assert_eq!((day, reads), (D2, 1));
         assert_eq!(clock.today(secs(3), || (D1, 0)), D2);
+    }
+
+    #[test]
+    fn day_clock_rechecks_within_a_minute_to_survive_clock_changes() {
+        let secs = Duration::from_secs;
+        let mut clock = DayClock::new(secs(0), || (D1, 3_600));
+        assert_eq!(clock.today(secs(59), || (D2, 0)), D1);
+        assert_eq!(clock.today(secs(60), || (D2, 0)), D2);
     }
 
     #[test]

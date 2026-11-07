@@ -18,7 +18,6 @@ const PING_PENDING: &str = "aguardando a primeira medição";
 
 type SharedPing = Arc<Mutex<Metric<u32>>>;
 
-/// Shutdown handle of the collector threads.
 pub struct Collection {
     stops: [Sender<()>; 2],
     workers: [thread::JoinHandle<()>; 2],
