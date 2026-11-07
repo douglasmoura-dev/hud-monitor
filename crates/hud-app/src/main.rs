@@ -3,13 +3,10 @@
 mod store;
 mod winffi;
 
-use hud_core::config::Config;
+use hud_core::config::{Config, HUD_SIZE};
 use hud_core::position::{clamp_to_screen, Point, Size};
 use slint::{ComponentHandle, PhysicalPosition};
 use std::{cell::RefCell, rc::Rc};
-
-const WINDOW_WIDTH: f32 = 320.0;
-const WINDOW_HEIGHT: f32 = 200.0;
 
 slint::slint! {
     export component Hud inherits Window {
@@ -73,8 +70,8 @@ fn run() -> Result<(), AppError> {
     let hud = Hud::new()?;
     let scale = hud.window().scale_factor();
     let size = Size {
-        width: (WINDOW_WIDTH * scale).round() as i32,
-        height: (WINDOW_HEIGHT * scale).round() as i32,
+        width: (HUD_SIZE.width as f32 * scale).round() as i32,
+        height: (HUD_SIZE.height as f32 * scale).round() as i32,
     };
     let screen = winffi::screen_size();
     let config = Rc::new(RefCell::new(store::load_or_first_run(&path, screen)?));

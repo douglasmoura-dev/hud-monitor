@@ -4,10 +4,31 @@ use crate::position::{first_run_position, Size, MARGIN};
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 
+/// Single source of truth for the HUD window size (the Slint literal in hud-app must match).
 pub const HUD_SIZE: Size = Size {
     width: 320,
     height: 200,
 };
+
+const DEFAULT_OPACITY: f32 = 0.9;
+const DEFAULT_CPU: Threshold = Threshold {
+    warn: 70.0,
+    crit: 90.0,
+};
+const DEFAULT_RAM: Threshold = Threshold {
+    warn: 75.0,
+    crit: 90.0,
+};
+const DEFAULT_TEMP: Threshold = Threshold {
+    warn: 75.0,
+    crit: 90.0,
+};
+const DEFAULT_PING: Threshold = Threshold {
+    warn: 80.0,
+    crit: 200.0,
+};
+const DEFAULT_TOGGLE_HUD: &str = "Ctrl+Alt+H";
+const DEFAULT_TOGGLE_MINIBAR: &str = "Ctrl+Alt+M";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -113,9 +134,37 @@ fn check_threshold(t: Threshold, field: &'static str) -> Result<(), ConfigError>
     }
 }
 
-/// `Mod+Mod+Key` shape: at least one `+`-separated part and none empty.
+const MODIFIERS: [&str; 4] = ["Ctrl", "Alt", "Shift", "Win"];
+const NAMED_KEYS: [&str; 12] = [
+    "Space", "Tab", "Enter", "Esc", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "Up",
+    "Down",
+];
+
+fn is_key(key: &str) -> bool {
+    let b = key.as_bytes();
+    let fn_key = key
+        .strip_prefix('F')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n) && !key.starts_with("F0"));
+    (b.len() == 1 && b[0].is_ascii_alphanumeric() && !b[0].is_ascii_lowercase())
+        || fn_key
+        || NAMED_KEYS.contains(&key)
+        || key == "Left"
+        || key == "Right"
+}
+
+/// `Mod+...+Key`: 1+ distinct modifiers from MODIFIERS, then exactly one known key.
 fn is_hotkey(text: &str) -> bool {
-    text.split('+').all(|part| !part.trim().is_empty())
+    let parts: Vec<&str> = text.split('+').collect();
+    let Some((key, mods)) = parts.split_last() else {
+        return false;
+    };
+    !mods.is_empty()
+        && is_key(key)
+        && mods
+            .iter()
+            .enumerate()
+            .all(|(i, m)| MODIFIERS.contains(m) && !mods[..i].contains(m))
 }
 
 impl Config {
@@ -126,14 +175,14 @@ impl Config {
             hud: WindowState {
                 x: hud_pos.x,
                 y: hud_pos.y,
-                opacity: 0.9,
+                opacity: DEFAULT_OPACITY,
                 visible: true,
             },
             minibar: MiniBar {
                 window: WindowState {
                     x: hud_pos.x,
                     y: hud_pos.y + HUD_SIZE.height + MARGIN,
-                    opacity: 0.9,
+                    opacity: DEFAULT_OPACITY,
                     visible: false,
                 },
                 items: vec![
@@ -147,26 +196,14 @@ impl Config {
             profiles: Vec::new(),
             active_profile: None,
             thresholds: Thresholds {
-                cpu_percent: Threshold {
-                    warn: 70.0,
-                    crit: 90.0,
-                },
-                ram_percent: Threshold {
-                    warn: 75.0,
-                    crit: 90.0,
-                },
-                temp_c: Threshold {
-                    warn: 75.0,
-                    crit: 90.0,
-                },
-                ping_ms: Threshold {
-                    warn: 80.0,
-                    crit: 200.0,
-                },
+                cpu_percent: DEFAULT_CPU,
+                ram_percent: DEFAULT_RAM,
+                temp_c: DEFAULT_TEMP,
+                ping_ms: DEFAULT_PING,
             },
             hotkeys: Hotkeys {
-                toggle_hud: "Ctrl+Alt+H".to_owned(),
-                toggle_minibar: "Ctrl+Alt+M".to_owned(),
+                toggle_hud: DEFAULT_TOGGLE_HUD.to_owned(),
+                toggle_minibar: DEFAULT_TOGGLE_MINIBAR.to_owned(),
             },
             autostart: false,
         }
@@ -182,8 +219,11 @@ impl Config {
         check_threshold(self.thresholds.ram_percent, "thresholds.ram_percent")?;
         check_threshold(self.thresholds.temp_c, "thresholds.temp_c")?;
         check_threshold(self.thresholds.ping_ms, "thresholds.ping_ms")?;
-        if !is_hotkey(&self.hotkeys.toggle_hud) || !is_hotkey(&self.hotkeys.toggle_minibar) {
-            return Err(invalid("hotkeys"));
+        if !is_hotkey(&self.hotkeys.toggle_hud) {
+            return Err(invalid("hotkeys.toggle_hud"));
+        }
+        if !is_hotkey(&self.hotkeys.toggle_minibar) {
+            return Err(invalid("hotkeys.toggle_minibar"));
         }
         self.validate_profiles()
     }
@@ -392,7 +432,50 @@ mod tests {
         c.hotkeys.toggle_hud = "Ctrl+".into();
         assert!(matches!(
             c.validate(),
-            Err(ConfigError::Invalid { field: "hotkeys" })
+            Err(ConfigError::Invalid {
+                field: "hotkeys.toggle_hud"
+            })
+        ));
+    }
+
+    #[test]
+    fn hotkey_grammar() {
+        for ok in [
+            "Ctrl+Alt+M",
+            "Win+F24",
+            "Shift+Ctrl+Alt+Win+0",
+            "Alt+PageUp",
+            "Ctrl+Left",
+        ] {
+            assert!(is_hotkey(ok), "{ok}");
+        }
+        for bad in [
+            "Foo+Bar+Baz",
+            "M",
+            "Ctrl+Ctrl+M",
+            "Ctrl+",
+            "",
+            "Ctrl+m",
+            "Ctrl+F25",
+            "Ctrl+F0",
+            "Ctrl+Alt",
+            "Ctrl+M+Alt",
+            "Ctrl+MM",
+            "Ctrl+F01",
+        ] {
+            assert!(!is_hotkey(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn invalid_minibar_hotkey_names_its_field() {
+        let mut c = Config::first_run(SCREEN);
+        c.hotkeys.toggle_minibar = "Foo+Bar+Baz".into();
+        assert!(matches!(
+            c.validate(),
+            Err(ConfigError::Invalid {
+                field: "hotkeys.toggle_minibar"
+            })
         ));
     }
 
