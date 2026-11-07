@@ -84,3 +84,9 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 ## E14 — Orçamento de memória e CPU
 - Input: build release, HUD + barrinha visíveis, 10 min a 1 Hz, i5-7200U → Expect: memória privada máxima ≤ 30 MB e CPU média ≤ 1% (medido por script PowerShell em `scripts/measure.ps1`).
 - Input: abrir e fechar o scanner 5 vezes → Expect: memória privada volta a ≤ 30 MB em 10 s.
+
+## Verificações adicionais — T02 (E02)
+- Input: TOML com `thresholds.cpu_percent` warn >= crit → Expect: `Err(ConfigError::Invalid { field: "thresholds.cpu_percent" })`.
+- Input: dois perfis com o mesmo nome → Expect: `Err(ConfigError::Invalid { field: "profiles" })`.
+- Input: `switch_profile("Nope")` → Expect: `Err(ConfigError::Invalid { field: "profile" })`.
+- Input: build release iniciado sem `config.toml` → Expect: HUD abre (config de primeira execução em memória) e processo fica vivo.
