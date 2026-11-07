@@ -12,7 +12,6 @@ use sysinfo::{
 
 const PROCESS_REFRESH: Duration = Duration::from_secs(5);
 const TOP_PROCESSES: usize = 3;
-const SYSTEM_DRIVE: &str = "C:\\";
 
 pub struct SysinfoSource {
     system: System,
@@ -89,10 +88,11 @@ impl SystemSource for SysinfoSource {
     fn disk_usage(&mut self) -> Option<(u64, u64)> {
         self.disks
             .refresh_specifics(false, DiskRefreshKind::nothing().with_storage());
+        let drive = format!("{}\\", std::env::var("SystemDrive").ok()?);
         let disk = self
             .disks
             .iter()
-            .find(|d| d.mount_point() == Path::new(SYSTEM_DRIVE))?;
+            .find(|d| d.mount_point() == Path::new(&drive))?;
         let total = disk.total_space();
         Some((total.saturating_sub(disk.available_space()), total))
     }

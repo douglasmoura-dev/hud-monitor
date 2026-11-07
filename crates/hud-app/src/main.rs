@@ -139,7 +139,7 @@ fn run() -> Result<(), AppError> {
             let _ = hud.hide();
         }
     });
-    let snapshots = collect::spawn();
+    let (snapshots, collection) = collect::spawn();
     let weak = hud.as_weak();
     let poll = slint::Timer::default();
     poll.start(
@@ -152,6 +152,7 @@ fn run() -> Result<(), AppError> {
         },
     );
     hud.run()?;
+    collection.shutdown();
     Ok(())
 }
 
