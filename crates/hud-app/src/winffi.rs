@@ -29,15 +29,17 @@ pub fn screen_size() -> Size {
     }
 }
 
-/// Current local calendar date.
-pub fn local_date() -> Date {
+/// Current local date and seconds elapsed since local midnight.
+pub fn local_now() -> (Date, u32) {
     // SAFETY: GetLocalTime takes no arguments and returns a plain struct by value.
     let t = unsafe { GetLocalTime() };
-    Date {
+    let date = Date {
         year: i32::from(t.wYear),
         month: u32::from(t.wMonth),
         day: u32::from(t.wDay),
-    }
+    };
+    let secs = u32::from(t.wHour) * 3600 + u32::from(t.wMinute) * 60 + u32::from(t.wSecond);
+    (date, secs)
 }
 
 /// PDH query for `\PhysicalDisk(_Total)` read/write bytes per second.
@@ -170,7 +172,8 @@ mod tests {
 
     #[test]
     fn local_date_is_plausible() {
-        let d = super::local_date();
+        let (d, secs) = super::local_now();
+        assert!(secs < 86_400);
         assert!(d.year >= 2024 && (1..=12).contains(&d.month) && (1..=31).contains(&d.day));
     }
 }

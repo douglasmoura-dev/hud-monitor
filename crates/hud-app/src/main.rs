@@ -87,6 +87,11 @@ fn save_position(hud: &Hud, path: &std::path::Path, config: &mut Config) {
 }
 
 fn show_snapshot(hud: &Hud, s: &Snapshot) {
+    if let Some(reason) = &s.unavailable {
+        hud.set_cpu_text(format!("CPU — ({reason})").into());
+        hud.set_ram_text(format!("RAM — ({reason})").into());
+        return;
+    }
     hud.set_cpu_text(format!("CPU {:.0}%", s.cpu.total).into());
     hud.set_ram_text(
         format!(

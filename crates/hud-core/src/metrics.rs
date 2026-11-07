@@ -1,11 +1,13 @@
 //! Snapshot model and the collector that builds it from abstract sources.
 
-use std::fmt;
+use std::{fmt, time::Duration};
 
 pub const DISK_IO_UNAVAILABLE: &str = "contador indisponível";
 pub const DISK_USAGE_UNAVAILABLE: &str = "disco C: indisponível";
 pub const FREQ_UNAVAILABLE: &str = "frequência indisponível";
+pub const SAVE_FAILED: &str = "não foi possível salvar o total do dia";
 pub const PING_UNAVAILABLE: &str = "sem resposta";
+const SECS_PER_DAY: u32 = 86_400;
 const SAVE_EVERY_TICKS: u32 = 10;
 
 /// A value that is either known or explicitly unavailable (shown as `—`).
@@ -75,11 +77,11 @@ pub struct DiskMetrics {
     pub io: Metric<DiskIo>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NetMetrics {
     pub down: u64,
     pub up: u64,
-    pub day_total: u64,
+    pub day_total: Metric<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,6 +91,67 @@ pub struct Snapshot {
     pub disk: DiskMetrics,
     pub net: NetMetrics,
     pub ping_ms: Metric<u32>,
+    /// Set when collection could not start; numeric fields are then placeholders to ignore.
+    pub unavailable: Option<String>,
+}
+
+impl Snapshot {
+    /// Degraded snapshot: every metric is `Unavailable(reason)`.
+    pub fn unavailable(reason: &str) -> Self {
+        Self {
+            cpu: CpuMetrics {
+                total: 0.0,
+                threads: Vec::new(),
+                above_50: 0,
+                freq_mhz: Metric::unavailable(reason),
+            },
+            mem: MemMetrics {
+                used: 0,
+                total: 0,
+                percent: 0,
+                top: Vec::new(),
+            },
+            disk: DiskMetrics {
+                usage: Metric::unavailable(reason),
+                io: Metric::unavailable(reason),
+            },
+            net: NetMetrics {
+                down: 0,
+                up: 0,
+                day_total: Metric::unavailable(reason),
+            },
+            ping_ms: Metric::unavailable(reason),
+            unavailable: Some(reason.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct DayStoreError(pub String);
+
+/// Midnight detection without reading the clock every tick.
+pub struct DayClock {
+    date: Date,
+    rollover_at: Duration,
+}
+
+impl DayClock {
+    /// `mono` is a monotonic time since process start; `read` returns local date and seconds into the day.
+    pub fn new(mono: Duration, read: impl FnOnce() -> (Date, u32)) -> Self {
+        let (date, secs) = read();
+        Self {
+            date,
+            rollover_at: mono + Duration::from_secs(u64::from(SECS_PER_DAY.saturating_sub(secs))),
+        }
+    }
+
+    pub fn today(&mut self, mono: Duration, read: impl FnOnce() -> (Date, u32)) -> Date {
+        if mono >= self.rollover_at {
+            *self = Self::new(mono, read);
+        }
+        self.date
+    }
 }
 
 pub trait SystemSource {
@@ -115,7 +178,7 @@ pub trait PingSource {
 /// Persistence of the daily network total, one record per date.
 pub trait DayStore {
     fn load(&self, date: Date) -> Option<u64>;
-    fn save(&self, date: Date, bytes: u64);
+    fn save(&self, date: Date, bytes: u64) -> Result<(), DayStoreError>;
 }
 
 pub fn ping_metric(source: &mut dyn PingSource) -> Metric<u32> {
@@ -132,6 +195,8 @@ pub struct Collector<S, D, T> {
     day: Date,
     day_total: u64,
     ticks: u32,
+    save_error: Option<DayStoreError>,
+    save_failed: bool,
 }
 
 impl<S: SystemSource, D: DiskIoSource, T: DayStore> Collector<S, D, T> {
@@ -146,6 +211,8 @@ impl<S: SystemSource, D: DiskIoSource, T: DayStore> Collector<S, D, T> {
             day: today,
             day_total,
             ticks: 0,
+            save_error: None,
+            save_failed: false,
         }
     }
 
@@ -157,12 +224,23 @@ impl<S: SystemSource, D: DiskIoSource, T: DayStore> Collector<S, D, T> {
             disk: self.disk(),
             net: self.net(elapsed_secs, today),
             ping_ms,
+            unavailable: None,
         }
     }
 
-    /// Persists the current day total (call on shutdown).
-    pub fn flush(&self) {
-        self.store.save(self.day, self.day_total);
+    /// Persists the current day total (call on shutdown); failures are kept for `take_save_error`.
+    pub fn flush(&mut self) {
+        match self.store.save(self.day, self.day_total) {
+            Ok(()) => self.save_failed = false,
+            Err(e) => {
+                self.save_failed = true;
+                self.save_error = Some(e);
+            }
+        }
+    }
+
+    pub fn take_save_error(&mut self) -> Option<DayStoreError> {
+        self.save_error.take()
     }
 
     fn cpu(&mut self) -> CpuMetrics {
@@ -227,7 +305,11 @@ impl<S: SystemSource, D: DiskIoSource, T: DayStore> Collector<S, D, T> {
         NetMetrics {
             down: per_sec(drx, elapsed_secs),
             up: per_sec(dtx, elapsed_secs),
-            day_total: self.day_total,
+            day_total: if self.save_failed {
+                Metric::unavailable(SAVE_FAILED)
+            } else {
+                Metric::Available(self.day_total)
+            },
         }
     }
 
@@ -295,8 +377,9 @@ mod tests {
         fn load(&self, date: Date) -> Option<u64> {
             self.0.borrow().get(&date.to_string()).copied()
         }
-        fn save(&self, date: Date, bytes: u64) {
+        fn save(&self, date: Date, bytes: u64) -> Result<(), DayStoreError> {
             self.0.borrow_mut().insert(date.to_string(), bytes);
+            Ok(())
         }
     }
 
@@ -343,7 +426,7 @@ mod tests {
         let s = c.tick(1.0, D1, no_ping());
         assert_eq!(rate(s.net.down), "4.2 MB/s");
         assert_eq!(rate(s.net.up), "320 KB/s");
-        assert_eq!(s.net.day_total, 4_404_019 + 327_680);
+        assert_eq!(s.net.day_total, Metric::Available(4_404_019 + 327_680));
     }
 
     #[test]
@@ -369,9 +452,12 @@ mod tests {
         let mut c = collector(sys, store.clone());
         let three_gb = 3_328_599_654;
         *net.borrow_mut() = (three_gb, 0);
-        assert_eq!(c.tick(1.0, D1, no_ping()).net.day_total, three_gb);
+        assert_eq!(
+            c.tick(1.0, D1, no_ping()).net.day_total,
+            Metric::Available(three_gb)
+        );
         let s = c.tick(1.0, D2, no_ping());
-        assert_eq!(s.net.day_total, 0);
+        assert_eq!(s.net.day_total, Metric::Available(0));
         assert_eq!(store.load(D1), Some(three_gb));
         assert_eq!(store.load(D2), None);
     }
@@ -379,9 +465,9 @@ mod tests {
     #[test]
     fn day_total_resumes_from_store_on_start() {
         let store = MemStore::default();
-        store.save(D1, 500);
+        store.save(D1, 500).unwrap();
         let s = collector(FakeSystem::default(), store).tick(1.0, D1, no_ping());
-        assert_eq!(s.net.day_total, 500);
+        assert_eq!(s.net.day_total, Metric::Available(500));
     }
 
     #[test]
@@ -403,6 +489,66 @@ mod tests {
             }
         }
         assert_eq!(ping_metric(&mut Dead), no_ping());
+    }
+
+    struct FailingStore;
+    impl DayStore for FailingStore {
+        fn load(&self, _: Date) -> Option<u64> {
+            None
+        }
+        fn save(&self, _: Date, _: u64) -> Result<(), DayStoreError> {
+            Err(DayStoreError("disk full".into()))
+        }
+    }
+
+    #[test]
+    fn failed_save_marks_day_total_unavailable() {
+        let mut c = Collector::new(FakeSystem::default(), NoDiskIo, FailingStore, D1);
+        c.flush();
+        assert!(c.take_save_error().is_some());
+        assert!(c.take_save_error().is_none());
+        let s = c.tick(1.0, D1, no_ping());
+        assert_eq!(s.net.day_total, Metric::unavailable(SAVE_FAILED));
+    }
+
+    #[test]
+    fn successful_save_clears_unavailable_day_total() {
+        let mut c = collector(FakeSystem::default(), MemStore::default());
+        c.save_failed = true;
+        c.flush();
+        let s = c.tick(1.0, D1, no_ping());
+        assert_eq!(s.net.day_total, Metric::Available(0));
+    }
+
+    #[test]
+    fn init_failure_snapshot_is_all_unavailable_with_reason() {
+        let s = Snapshot::unavailable("sysinfo falhou");
+        assert_eq!(s.unavailable.as_deref(), Some("sysinfo falhou"));
+        assert_eq!(s.ping_ms, Metric::unavailable("sysinfo falhou"));
+        assert_eq!(s.disk.io, Metric::unavailable("sysinfo falhou"));
+        assert_eq!(s.net.day_total, Metric::unavailable("sysinfo falhou"));
+        assert_eq!(s.cpu.freq_mhz, Metric::unavailable("sysinfo falhou"));
+    }
+
+    #[test]
+    fn day_clock_reads_clock_only_at_midnight() {
+        let secs = Duration::from_secs;
+        let mut reads = 0;
+        let mut clock = DayClock::new(secs(0), || (D1, 86_398));
+        assert_eq!(
+            clock.today(secs(1), || {
+                reads += 1;
+                (D2, 0)
+            }),
+            D1
+        );
+        assert_eq!(reads, 0);
+        let day = clock.today(secs(2), || {
+            reads += 1;
+            (D2, 0)
+        });
+        assert_eq!((day, reads), (D2, 1));
+        assert_eq!(clock.today(secs(3), || (D1, 0)), D2);
     }
 
     #[test]

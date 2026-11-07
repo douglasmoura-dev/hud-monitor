@@ -2,7 +2,7 @@
 
 use crate::sources::{FileDayStore, IcmpPing, PdhDiskIo, SysinfoSource};
 use crate::{store, winffi};
-use hud_core::metrics::{ping_metric, Collector, Metric, PingSource, Snapshot};
+use hud_core::metrics::{ping_metric, Collector, DayClock, Metric, PingSource, Snapshot};
 use std::{
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
@@ -65,14 +65,16 @@ fn ping_loop(mut source: impl PingSource, slot: &SharedPing, stop: &Receiver<()>
 fn snapshot_loop(tx: &Sender<Snapshot>, ping: &SharedPing, stop: &Receiver<()>) {
     let (system, dir) = match (SysinfoSource::new(), store::data_dir()) {
         (Ok(s), Ok(d)) => (s, d),
-        (Err(e), _) => return eprintln!("hud-monitor: system metrics unavailable: {e}"),
-        (_, Err(e)) => return eprintln!("hud-monitor: {e}"),
+        (Err(e), _) => return report_init_failure(tx, &format!("coleta indisponível: {e}")),
+        (_, Err(e)) => return report_init_failure(tx, &e.to_string()),
     };
+    let start = Instant::now();
+    let mut clock = DayClock::new(start.elapsed(), winffi::local_now);
     let mut collector = Collector::new(
         system,
         PdhDiskIo::new(),
         FileDayStore::new(dir),
-        winffi::local_date(),
+        clock.today(start.elapsed(), winffi::local_now),
     );
     let mut last = Instant::now();
     while stop.recv_timeout(TICK) == Err(RecvTimeoutError::Timeout) {
@@ -81,10 +83,29 @@ fn snapshot_loop(tx: &Sender<Snapshot>, ping: &SharedPing, stop: &Receiver<()>) 
         let ping_now = ping
             .lock()
             .map_or(Metric::unavailable(PING_PENDING), |g| g.clone());
-        let snapshot = collector.tick(elapsed, winffi::local_date(), ping_now);
+        let today = clock.today(start.elapsed(), winffi::local_now);
+        let snapshot = collector.tick(elapsed, today, ping_now);
+        log_save_error(&mut collector);
         if tx.send(snapshot).is_err() {
             break;
         }
     }
     collector.flush();
+    log_save_error(&mut collector);
+}
+
+fn log_save_error<S, D, T>(collector: &mut Collector<S, D, T>)
+where
+    S: hud_core::metrics::SystemSource,
+    D: hud_core::metrics::DiskIoSource,
+    T: hud_core::metrics::DayStore,
+{
+    if let Some(e) = collector.take_save_error() {
+        eprintln!("hud-monitor: could not save network total: {e}");
+    }
+}
+
+fn report_init_failure(tx: &Sender<Snapshot>, reason: &str) {
+    eprintln!("hud-monitor: {reason}");
+    let _ = tx.send(Snapshot::unavailable(reason));
 }

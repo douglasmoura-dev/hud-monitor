@@ -1,6 +1,6 @@
 //! Daily network total: `net-YYYY-MM-DD.json` next to the config.
 
-use hud_core::metrics::{Date, DayStore};
+use hud_core::metrics::{Date, DayStore, DayStoreError};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -24,12 +24,10 @@ impl DayStore for FileDayStore {
         serde_json::from_str::<Value>(&text).ok()?["bytes"].as_u64()
     }
 
-    fn save(&self, date: Date, bytes: u64) {
-        let write = std::fs::create_dir_all(&self.dir)
-            .and_then(|()| std::fs::write(self.path(date), json!({ "bytes": bytes }).to_string()));
-        if let Err(e) = write {
-            eprintln!("hud-monitor: could not save network total: {e}");
-        }
+    fn save(&self, date: Date, bytes: u64) -> Result<(), DayStoreError> {
+        std::fs::create_dir_all(&self.dir)
+            .and_then(|()| std::fs::write(self.path(date), json!({ "bytes": bytes }).to_string()))
+            .map_err(|e| DayStoreError(e.to_string()))
     }
 }
 
@@ -56,11 +54,22 @@ mod tests {
     fn saves_one_file_per_day_and_loads_it_back() {
         let dir = temp_dir();
         let store = FileDayStore::new(dir.clone());
-        store.save(D1, 3_100);
-        store.save(D2, 0);
+        store.save(D1, 3_100).unwrap();
+        store.save(D2, 0).unwrap();
         assert_eq!(store.load(D1), Some(3_100));
         assert_eq!(store.load(D2), Some(0));
         assert!(dir.join("net-2026-11-07.json").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn save_into_a_file_path_fails_with_error() {
+        let dir = temp_dir().join("save-fails");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a-file");
+        std::fs::write(&file, "x").unwrap();
+        let store = FileDayStore::new(file);
+        assert!(store.save(D1, 1).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
