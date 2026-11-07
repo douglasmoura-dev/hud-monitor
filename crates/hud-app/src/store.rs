@@ -12,11 +12,14 @@ pub enum StoreError {
     Config(#[from] ConfigError),
 }
 
-pub fn default_path() -> Result<PathBuf, StoreError> {
+/// `%APPDATA%\hud-monitor`, home of every persisted file.
+pub fn data_dir() -> Result<PathBuf, StoreError> {
     let appdata = env::var_os("APPDATA").ok_or(StoreError::NoAppData)?;
-    Ok(PathBuf::from(appdata)
-        .join("hud-monitor")
-        .join("config.toml"))
+    Ok(PathBuf::from(appdata).join("hud-monitor"))
+}
+
+pub fn default_path() -> Result<PathBuf, StoreError> {
+    Ok(data_dir()?.join("config.toml"))
 }
 
 /// Loads the config, or builds the explicit first-run one when no file exists yet.
