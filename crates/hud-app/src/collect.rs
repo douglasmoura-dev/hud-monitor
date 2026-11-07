@@ -18,17 +18,19 @@ const PING_PENDING: &str = "aguardando a primeira medição";
 
 type SharedPing = Arc<Mutex<Metric<u32>>>;
 
-/// Shutdown handle of the snapshot thread.
+/// Shutdown handle of the collector threads.
 pub struct Collection {
-    stop: Sender<()>,
-    worker: thread::JoinHandle<()>,
+    stops: [Sender<()>; 2],
+    workers: [thread::JoinHandle<()>; 2],
 }
 
 impl Collection {
-    /// Stops the snapshot thread and waits for it to persist the daily total.
+    /// Stops both threads; the snapshot thread persists the daily total first.
     pub fn shutdown(self) {
-        drop(self.stop);
-        let _ = self.worker.join();
+        drop(self.stops);
+        for worker in self.workers {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -37,19 +39,26 @@ pub fn spawn() -> (Receiver<Snapshot>, Collection) {
     let (tx, rx) = mpsc::channel();
     let ping: SharedPing = Arc::new(Mutex::new(Metric::unavailable(PING_PENDING)));
     let ping_slot = ping.clone();
-    thread::spawn(move || ping_loop(IcmpPing::new(), &ping_slot));
+    let (ping_stop, ping_stop_rx) = mpsc::channel();
+    let ping_worker = thread::spawn(move || ping_loop(IcmpPing::new(), &ping_slot, &ping_stop_rx));
     let (stop, stop_rx) = mpsc::channel();
     let worker = thread::spawn(move || snapshot_loop(&tx, &ping, &stop_rx));
-    (rx, Collection { stop, worker })
+    let collection = Collection {
+        stops: [stop, ping_stop],
+        workers: [worker, ping_worker],
+    };
+    (rx, collection)
 }
 
-fn ping_loop(mut source: impl PingSource, slot: &SharedPing) {
+fn ping_loop(mut source: impl PingSource, slot: &SharedPing, stop: &Receiver<()>) {
     loop {
         let value = ping_metric(&mut source);
         if let Ok(mut guard) = slot.lock() {
             *guard = value;
         }
-        thread::sleep(PING_EVERY);
+        if stop.recv_timeout(PING_EVERY) != Err(RecvTimeoutError::Timeout) {
+            break;
+        }
     }
 }
 

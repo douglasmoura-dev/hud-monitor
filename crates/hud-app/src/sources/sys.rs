@@ -101,7 +101,7 @@ impl SystemSource for SysinfoSource {
         self.networks.refresh(true);
         self.networks
             .iter()
-            .filter(|(name, _)| !name.to_string_lossy().contains("Loopback"))
+            .filter(|(name, _)| !name.to_string_lossy().to_lowercase().contains("loopback"))
             .fold((0, 0), |(rx, tx), (_, n)| {
                 (rx + n.total_received(), tx + n.total_transmitted())
             })
