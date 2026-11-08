@@ -8,5 +8,6 @@ pub mod format;
 pub mod integration;
 pub mod metrics;
 pub mod position;
+pub mod removal;
 pub mod sensors;
 pub mod view;

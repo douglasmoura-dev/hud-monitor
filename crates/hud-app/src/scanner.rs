@@ -1,9 +1,11 @@
 //! Cleanup scanner window: a background scan thread feeding a short-lived Slint window.
-//! Closing the window cancels the scan and drops every result.
+//! After an explicit confirmation a second background thread moves the marked categories to
+//! the Recycle Bin. Closing the window cancels both and drops every result.
 
-use crate::sources::{env_roots, StdFs, WinSystem};
+use crate::sources::{env_roots, ShellRecycler, StdFs, WinSystem};
 use crate::{ai, CleanRow, Scanner};
-use hud_core::cleanup::{scan_all, selected_text, Category};
+use hud_core::cleanup::{scan_all, selected_text, Category, CategoryId};
+use hud_core::removal::{confirmation_lines, execute, plan_removal, selected_ids, Report};
 use slint::ComponentHandle;
 use std::{
     cell::RefCell,
@@ -18,6 +20,7 @@ use std::{
 };
 
 const POLL: Duration = Duration::from_millis(200);
+const WORKER_LOST: &str = "a limpeza parou de forma inesperada; confira a Lixeira";
 const CLOCK_UNAVAILABLE: &str = "relógio do sistema indisponível";
 
 enum ScanEvent {
@@ -48,19 +51,24 @@ impl ScanRun {
 
     /// New events plus whether the worker has finished.
     fn poll(&self) -> (Vec<ScanEvent>, bool) {
-        let mut out = Vec::new();
-        loop {
-            match self.events.try_recv() {
-                Ok(e) => out.push(e),
-                Err(TryRecvError::Empty) => return (out, false),
-                Err(TryRecvError::Disconnected) => return (out, true),
-            }
+        drain(&self.events)
+    }
+}
+
+/// Everything waiting on the channel, plus whether the sender is gone.
+fn drain<T>(events: &Receiver<T>) -> (Vec<T>, bool) {
+    let mut out = Vec::new();
+    loop {
+        match events.try_recv() {
+            Ok(e) => out.push(e),
+            Err(TryRecvError::Empty) => return (out, false),
+            Err(TryRecvError::Disconnected) => return (out, true),
         }
     }
 }
 
 fn run_scan(tx: &mpsc::Sender<ScanEvent>, cancel: &AtomicBool) {
-    let Some(now) = ai::unix_now().and_then(|n| u64::try_from(n).ok()) else {
+    let Some(now) = unix_now() else {
         let _ = tx.send(ScanEvent::Failed(CLOCK_UNAVAILABLE.to_owned()));
         return;
     };
@@ -69,10 +77,111 @@ fn run_scan(tx: &mpsc::Sender<ScanEvent>, cancel: &AtomicBool) {
     });
 }
 
+fn unix_now() -> Option<u64> {
+    ai::unix_now().and_then(|n| u64::try_from(n).ok())
+}
+
+enum RemovalEvent {
+    Progress { done: usize, total: usize },
+    Finished(Report),
+    Failed(String),
+}
+
+/// A running removal. Dropping it asks the worker to stop after its current batch.
+struct RemovalRun {
+    events: Receiver<RemovalEvent>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for RemovalRun {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+impl RemovalRun {
+    fn spawn(ids: Vec<CategoryId>) -> Self {
+        let (tx, events) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        thread::spawn(move || run_removal(&ids, &tx, &flag));
+        Self { events, cancel }
+    }
+}
+
+/// Plans again with the scanner rules (so nothing touched since the scan is moved), then sends
+/// the items to the Recycle Bin.
+fn run_removal(ids: &[CategoryId], tx: &mpsc::Sender<RemovalEvent>, cancel: &AtomicBool) {
+    let Some(now) = unix_now() else {
+        let _ = tx.send(RemovalEvent::Failed(CLOCK_UNAVAILABLE.to_owned()));
+        return;
+    };
+    let plan = plan_removal(ids, &StdFs, &WinSystem, &env_roots(), now, cancel);
+    let total = plan.steps();
+    let _ = tx.send(RemovalEvent::Progress { done: 0, total });
+    let report = execute(&plan, &ShellRecycler, cancel, &mut |done| {
+        let _ = tx.send(RemovalEvent::Progress { done, total });
+    });
+    let _ = tx.send(RemovalEvent::Finished(report));
+}
+
+/// What the window shows besides the category list.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum Phase {
+    #[default]
+    List,
+    Confirm {
+        ids: Vec<CategoryId>,
+        lines: Vec<String>,
+        total: String,
+    },
+    Running {
+        done: usize,
+        total: usize,
+    },
+    Done {
+        headline: String,
+        lines: Vec<String>,
+    },
+}
+
+impl Phase {
+    fn name(&self) -> &'static str {
+        match self {
+            Phase::List => "list",
+            Phase::Confirm { .. } => "confirm",
+            Phase::Running { .. } => "running",
+            Phase::Done { .. } => "done",
+        }
+    }
+
+    fn headline(&self) -> String {
+        match self {
+            Phase::List => String::new(),
+            Phase::Confirm { total, .. } => {
+                format!("Mover para a Lixeira ({total})? Dá para restaurar pela Lixeira.")
+            }
+            Phase::Running { done, total } => {
+                format!("Movendo para a Lixeira... {done} de {total}")
+            }
+            Phase::Done { headline, .. } => headline.clone(),
+        }
+    }
+
+    fn lines(&self) -> Vec<String> {
+        match self {
+            Phase::Confirm { lines, .. } | Phase::Done { lines, .. } => lines.clone(),
+            Phase::List | Phase::Running { .. } => Vec::new(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     categories: Vec<Category>,
     run: Option<ScanRun>,
+    removal: Option<RemovalRun>,
+    phase: Phase,
     failure: Option<String>,
 }
 
@@ -80,17 +189,25 @@ impl State {
     fn start(&mut self) {
         self.categories = Vec::new();
         self.failure = None;
+        self.phase = Phase::List;
         self.run = Some(ScanRun::spawn());
     }
 
-    /// Cancels the scan and frees the results.
+    /// Cancels the scan and any removal, and frees the results.
     fn release(&mut self) {
         self.run = None;
+        self.removal = None;
+        self.phase = Phase::List;
         self.categories = Vec::new();
+    }
+
+    fn busy(&self) -> bool {
+        self.run.is_some() || self.removal.is_some()
     }
 
     /// Absorbs worker events; true while the scan is still running.
     fn absorb(&mut self) -> bool {
+        self.absorb_removal();
         let Some(run) = &self.run else {
             return false;
         };
@@ -105,6 +222,89 @@ impl State {
             self.run = None;
         }
         !finished
+    }
+
+    fn absorb_removal(&mut self) {
+        let Some(run) = &self.removal else {
+            return;
+        };
+        let (events, ended) = drain(&run.events);
+        let mut finished = false;
+        for event in events {
+            match event {
+                RemovalEvent::Progress { done, total } => {
+                    self.phase = Phase::Running { done, total };
+                }
+                RemovalEvent::Finished(report) => {
+                    self.phase = Phase::Done {
+                        headline: report.message(),
+                        lines: report.skipped_lines(),
+                    };
+                    finished = true;
+                }
+                RemovalEvent::Failed(reason) => {
+                    self.phase = Phase::Done {
+                        headline: reason,
+                        lines: Vec::new(),
+                    };
+                    finished = true;
+                }
+            }
+        }
+        if ended && !finished {
+            self.phase = Phase::Done {
+                headline: WORKER_LOST.to_owned(),
+                lines: Vec::new(),
+            };
+        }
+        if finished || ended {
+            self.removal = None;
+        }
+    }
+
+    /// Opens the confirmation step for the marked categories; nothing moves yet.
+    fn ask_remove(&mut self) {
+        if !self.can_remove() {
+            return;
+        }
+        self.phase = Phase::Confirm {
+            ids: selected_ids(&self.categories),
+            lines: confirmation_lines(&self.categories),
+            total: selected_text(&self.categories),
+        };
+    }
+
+    /// Starts the removal; only possible from the confirmation step.
+    fn confirm_remove(&mut self) {
+        let Phase::Confirm { ids, .. } = &self.phase else {
+            return;
+        };
+        self.removal = Some(RemovalRun::spawn(ids.clone()));
+        self.phase = Phase::Running { done: 0, total: 0 };
+    }
+
+    /// Backs out of the confirmation, or asks a running removal to stop after its batch.
+    fn cancel_remove(&mut self) {
+        match &self.phase {
+            Phase::Confirm { .. } => self.phase = Phase::List,
+            Phase::Running { .. } => {
+                if let Some(run) = &self.removal {
+                    run.cancel.store(true, Ordering::Relaxed);
+                }
+            }
+            Phase::List | Phase::Done { .. } => {}
+        }
+    }
+
+    /// Leaves the result screen and measures again.
+    fn finish(&mut self) {
+        if matches!(self.phase, Phase::Done { .. }) {
+            self.start();
+        }
+    }
+
+    fn can_remove(&self) -> bool {
+        !self.busy() && self.phase == Phase::List && !selected_ids(&self.categories).is_empty()
     }
 }
 
@@ -131,6 +331,11 @@ fn rows(categories: &[Category]) -> slint::ModelRc<CleanRow> {
     Rc::new(slint::VecModel::from(data)).into()
 }
 
+fn text_lines(lines: Vec<String>) -> slint::ModelRc<slint::SharedString> {
+    let data: Vec<slint::SharedString> = lines.into_iter().map(Into::into).collect();
+    Rc::new(slint::VecModel::from(data)).into()
+}
+
 fn status_text(state: &State, scanning: bool) -> String {
     match (&state.failure, scanning) {
         (Some(reason), _) => reason.clone(),
@@ -139,11 +344,16 @@ fn status_text(state: &State, scanning: bool) -> String {
     }
 }
 
-fn refresh(window: &Scanner, state: &State, scanning: bool) {
+fn refresh(window: &Scanner, state: &State) {
+    let scanning = state.run.is_some();
     window.set_rows(rows(&state.categories));
     window.set_total(selected_text(&state.categories).into());
     window.set_status(status_text(state, scanning).into());
     window.set_scanning(scanning);
+    window.set_can_remove(state.can_remove());
+    window.set_phase(state.phase.name().into());
+    window.set_headline(state.phase.headline().into());
+    window.set_lines(text_lines(state.phase.lines()));
 }
 
 fn start_timer(window: &Scanner, state: &Rc<RefCell<State>>) -> slint::Timer {
@@ -154,20 +364,38 @@ fn start_timer(window: &Scanner, state: &Rc<RefCell<State>>) -> slint::Timer {
             return;
         };
         let mut s = state.borrow_mut();
-        if s.run.is_none() {
+        if !s.busy() {
             return;
         }
-        let scanning = s.absorb();
-        refresh(&window, &s, scanning);
+        s.absorb();
+        refresh(&window, &s);
     });
     timer
+}
+
+/// A callback body that changes the session state and redraws the window.
+fn updater(window: &Scanner, state: &Rc<RefCell<State>>, change: fn(&mut State)) -> impl Fn() {
+    let (weak, state) = (window.as_weak(), state.clone());
+    move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut s = state.borrow_mut();
+        change(&mut s);
+        refresh(&window, &s);
+    }
+}
+
+fn rescan(s: &mut State) {
+    s.release();
+    s.start();
 }
 
 fn new_session(slot: &Slot) -> Result<Session, slint::PlatformError> {
     let window = Scanner::new()?;
     let state = Rc::new(RefCell::new(State::default()));
     state.borrow_mut().start();
-    refresh(&window, &state.borrow(), true);
+    refresh(&window, &state.borrow());
 
     let (weak, st) = (window.as_weak(), state.clone());
     window.on_toggle(move |i| {
@@ -175,25 +403,19 @@ fn new_session(slot: &Slot) -> Result<Session, slint::PlatformError> {
             return;
         };
         let mut s = st.borrow_mut();
-        let scanning = s.run.is_some();
         if let Some(c) = usize::try_from(i)
             .ok()
             .and_then(|i| s.categories.get_mut(i))
         {
             c.toggle();
         }
-        refresh(&window, &s, scanning);
+        refresh(&window, &s);
     });
-    let (weak, st) = (window.as_weak(), state.clone());
-    window.on_rescan(move || {
-        let Some(window) = weak.upgrade() else {
-            return;
-        };
-        let mut s = st.borrow_mut();
-        s.release();
-        s.start();
-        refresh(&window, &s, true);
-    });
+    window.on_rescan(updater(&window, &state, rescan));
+    window.on_ask_remove(updater(&window, &state, State::ask_remove));
+    window.on_confirm_remove(updater(&window, &state, State::confirm_remove));
+    window.on_cancel_remove(updater(&window, &state, State::cancel_remove));
+    window.on_finish(updater(&window, &state, State::finish));
     let closer = slot.clone();
     window.on_dismiss(move || close(&closer));
     let closer = slot.clone();
@@ -243,6 +465,7 @@ mod tests {
     use super::*;
     use hud_core::cleanup::{CategoryId, Usage};
     use hud_core::metrics::Metric;
+    use hud_core::removal::Skipped;
 
     fn category(id: CategoryId, bytes: u64) -> Category {
         Category::new(
@@ -276,7 +499,7 @@ mod tests {
                 events,
                 cancel: Arc::new(AtomicBool::new(false)),
             }),
-            failure: None,
+            ..State::default()
         };
         state.release();
         assert!(state.categories.is_empty());
@@ -315,5 +538,175 @@ mod tests {
             status_text(&State::default(), false),
             "0 categorias medidas"
         );
+    }
+
+    fn marked(id: CategoryId, bytes: u64) -> Category {
+        category(id, bytes)
+    }
+
+    #[test]
+    fn nothing_to_remove_without_marked_categories() {
+        let mut state = State::default();
+        assert!(!state.can_remove());
+        state.ask_remove();
+        assert_eq!(state.phase, Phase::List);
+        let mut unmarked = marked(CategoryId::Temp, 5);
+        unmarked.toggle();
+        state.categories = vec![unmarked];
+        state.ask_remove();
+        assert_eq!(state.phase, Phase::List);
+    }
+
+    #[test]
+    fn asking_shows_the_categories_and_total_without_removing_anything() {
+        let mut state = State {
+            categories: vec![
+                marked(CategoryId::Temp, 100),
+                marked(CategoryId::PackageCaches, 200),
+            ],
+            ..State::default()
+        };
+        assert!(state.can_remove());
+        state.ask_remove();
+        let Phase::Confirm { ids, lines, total } = &state.phase else {
+            panic!("expected confirmation, got {:?}", state.phase);
+        };
+        assert_eq!(ids, &[CategoryId::Temp, CategoryId::PackageCaches]);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("Temporários"));
+        assert_eq!(total, "300 B");
+        assert!(state.removal.is_none(), "no worker before confirming");
+        assert!(state.phase.headline().contains("300 B"));
+        assert_eq!(state.phase.name(), "confirm");
+    }
+
+    #[test]
+    fn cancelling_the_confirmation_goes_back_to_the_list() {
+        let mut state = State {
+            categories: vec![marked(CategoryId::Temp, 100)],
+            ..State::default()
+        };
+        state.ask_remove();
+        state.cancel_remove();
+        assert_eq!(state.phase, Phase::List);
+        assert!(state.removal.is_none());
+    }
+
+    #[test]
+    fn confirming_outside_the_confirmation_step_does_nothing() {
+        let mut state = State {
+            categories: vec![marked(CategoryId::Temp, 100)],
+            ..State::default()
+        };
+        state.confirm_remove();
+        assert!(state.removal.is_none());
+        assert_eq!(state.phase, Phase::List);
+    }
+
+    #[test]
+    fn removal_events_drive_progress_and_the_result_screen() {
+        let (tx, events) = mpsc::channel();
+        let mut state = State {
+            removal: Some(RemovalRun {
+                events,
+                cancel: Arc::new(AtomicBool::new(false)),
+            }),
+            phase: Phase::Running { done: 0, total: 0 },
+            ..State::default()
+        };
+        tx.send(RemovalEvent::Progress { done: 2, total: 5 })
+            .expect("send");
+        state.absorb();
+        assert_eq!(state.phase, Phase::Running { done: 2, total: 5 });
+        assert_eq!(state.phase.headline(), "Movendo para a Lixeira... 2 de 5");
+        assert!(state.removal.is_some());
+        let report = Report {
+            moved_items: 2,
+            freed_bytes: 300,
+            skipped: vec![Skipped {
+                path: r"C:\t\locked".into(),
+                reason: "em uso".into(),
+            }],
+            ..Report::default()
+        };
+        tx.send(RemovalEvent::Finished(report)).expect("send");
+        state.absorb();
+        let Phase::Done { headline, lines } = &state.phase else {
+            panic!("expected result, got {:?}", state.phase);
+        };
+        assert!(headline.starts_with("Liberados 300 B"));
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("locked"));
+        assert!(state.removal.is_none());
+    }
+
+    #[test]
+    fn a_failed_removal_shows_its_reason() {
+        let (tx, events) = mpsc::channel();
+        let mut state = State {
+            removal: Some(RemovalRun {
+                events,
+                cancel: Arc::new(AtomicBool::new(false)),
+            }),
+            phase: Phase::Running { done: 0, total: 0 },
+            ..State::default()
+        };
+        tx.send(RemovalEvent::Failed(CLOCK_UNAVAILABLE.to_owned()))
+            .expect("send");
+        state.absorb();
+        assert_eq!(state.phase.headline(), CLOCK_UNAVAILABLE);
+        assert!(state.phase.lines().is_empty());
+    }
+
+    #[test]
+    fn stopping_a_running_removal_raises_its_cancel_flag() {
+        let (_tx, events) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut state = State {
+            removal: Some(RemovalRun {
+                events,
+                cancel: cancel.clone(),
+            }),
+            phase: Phase::Running { done: 1, total: 9 },
+            ..State::default()
+        };
+        assert!(!state.can_remove());
+        state.cancel_remove();
+        assert!(cancel.load(Ordering::Relaxed));
+        drop(state);
+    }
+
+    #[test]
+    fn closing_during_a_removal_cancels_it() {
+        let (_tx, events) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut state = State {
+            removal: Some(RemovalRun {
+                events,
+                cancel: cancel.clone(),
+            }),
+            phase: Phase::Running { done: 0, total: 3 },
+            ..State::default()
+        };
+        state.release();
+        assert!(cancel.load(Ordering::Relaxed));
+        assert_eq!(state.phase, Phase::List);
+    }
+
+    #[test]
+    fn a_worker_that_vanishes_does_not_leave_the_window_running() {
+        let (tx, events) = mpsc::channel::<RemovalEvent>();
+        let mut state = State {
+            removal: Some(RemovalRun {
+                events,
+                cancel: Arc::new(AtomicBool::new(false)),
+            }),
+            phase: Phase::Running { done: 1, total: 4 },
+            ..State::default()
+        };
+        drop(tx);
+        state.absorb();
+        assert_eq!(state.phase.headline(), WORKER_LOST);
+        assert!(state.removal.is_none());
     }
 }

@@ -14,10 +14,10 @@ pub const NODE_MODULES_MIN_AGE_SECS: u64 = 90 * DAY_SECS;
 pub const DOWNLOADS_MIN_AGE_SECS: u64 = 180 * DAY_SECS;
 pub const NEEDS_ADMIN: &str = "precisa de admin";
 pub const DOCKER_HINT: &str = "rode `docker system df` no terminal; o app não apaga nada do Docker";
-const PROJECT_MAX_DEPTH: u32 = 5;
+pub(crate) const PROJECT_MAX_DEPTH: u32 = 5;
 
 /// Folders never searched for projects: hidden ones (`.git`, `.venv`, `.cache`) and build output.
-fn skipped_project_dir(name: &str) -> bool {
+pub(crate) fn skipped_project_dir(name: &str) -> bool {
     name.starts_with('.') || name == "target" || name == "AppData"
 }
 
@@ -47,7 +47,7 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         self.path
             .file_name()
             .and_then(|n| n.to_str())
@@ -193,7 +193,7 @@ pub fn selected_text(categories: &[Category]) -> String {
     format::size(selected_bytes(categories))
 }
 
-fn is_old(modified: Option<u64>, now: u64, min_age: u64) -> bool {
+pub(crate) fn is_old(modified: Option<u64>, now: u64, min_age: u64) -> bool {
     modified.is_some_and(|m| now.saturating_sub(m) >= min_age)
 }
 
@@ -265,18 +265,18 @@ impl Roots {
 }
 
 /// Walks the filesystem through a `ScanFs`, aborting early when `cancel` is set.
-struct Walker<'a> {
-    fs: &'a dyn ScanFs,
-    cancel: &'a AtomicBool,
+pub(crate) struct Walker<'a> {
+    pub(crate) fs: &'a dyn ScanFs,
+    pub(crate) cancel: &'a AtomicBool,
 }
 
 impl Walker<'_> {
-    fn cancelled(&self) -> bool {
+    pub(crate) fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
 
     /// Lists a directory; a missing one is empty, an unreadable one is flagged.
-    fn list(&self, dir: &Path, usage: &mut Usage) -> Vec<Entry> {
+    pub(crate) fn list(&self, dir: &Path, usage: &mut Usage) -> Vec<Entry> {
         match self.fs.list(dir) {
             Ok(entries) => entries,
             Err(ScanError::NotFound) => Vec::new(),
@@ -287,28 +287,45 @@ impl Walker<'_> {
         }
     }
 
-    /// Sum of files under `root` (links skipped); `min_age` keeps only files at least that old.
-    fn usage(&self, root: &Path, now: u64, min_age: Option<u64>) -> Usage {
-        let mut usage = Usage::default();
+    /// Visits every file under `root` (links skipped) that is at least `min_age` old.
+    /// Returns a `Usage` whose only meaning is the `incomplete` flag.
+    pub(crate) fn each_file(
+        &self,
+        root: &Path,
+        now: u64,
+        min_age: Option<u64>,
+        visit: &mut dyn FnMut(&Path, u64),
+    ) -> Usage {
+        let mut flags = Usage::default();
         let mut pending = vec![root.to_path_buf()];
         while let Some(dir) = pending.pop() {
             if self.cancelled() {
                 break;
             }
-            for entry in self.list(&dir, &mut usage) {
+            for entry in self.list(&dir, &mut flags) {
                 match entry.kind {
                     EntryKind::Dir { .. } => pending.push(entry.path),
                     EntryKind::File { len, modified } => {
                         if min_age.is_none_or(|age| is_old(modified, now, age)) {
-                            usage.bytes += len;
-                            usage.items += 1;
+                            visit(&entry.path, len);
                         }
                     }
                     EntryKind::Link => {}
                 }
             }
         }
-        usage
+        flags
+    }
+
+    /// Sum of files under `root` (links skipped); `min_age` keeps only files at least that old.
+    pub(crate) fn usage(&self, root: &Path, now: u64, min_age: Option<u64>) -> Usage {
+        let mut sum = Usage::default();
+        let flags = self.each_file(root, now, min_age, &mut |_, len| {
+            sum.bytes += len;
+            sum.items += 1;
+        });
+        sum.incomplete = flags.incomplete;
+        sum
     }
 
     fn usage_of_all(&self, roots: &[PathBuf], now: u64, min_age: Option<u64>) -> Usage {
@@ -319,25 +336,44 @@ impl Walker<'_> {
         total
     }
 
-    fn browser_caches(&self, user_data_dirs: &[PathBuf], now: u64) -> Usage {
-        let mut total = Usage::default();
+    /// `Cache` and `Code Cache` folders of every Chromium profile under `user_data_dirs`.
+    pub(crate) fn browser_cache_dirs(
+        &self,
+        user_data_dirs: &[PathBuf],
+        flags: &mut Usage,
+    ) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
         for user_data in user_data_dirs {
-            for profile in self.list(user_data, &mut total) {
+            for profile in self.list(user_data, flags) {
                 let is_profile = matches!(profile.kind, EntryKind::Dir { .. })
                     && (profile.name() == "Default" || profile.name().starts_with("Profile "));
                 if is_profile {
                     for cache in ["Cache", "Code Cache"] {
-                        total.add(self.usage(&profile.path.join(cache), now, None));
+                        dirs.push(profile.path.join(cache));
                     }
                 }
             }
         }
+        dirs
+    }
+
+    fn browser_caches(&self, user_data_dirs: &[PathBuf], now: u64) -> Usage {
+        let mut total = Usage::default();
+        for cache in self.browser_cache_dirs(user_data_dirs, &mut total) {
+            total.add(self.usage(&cache, now, None));
+        }
         total
     }
 
-    /// `node_modules` folders whose parent was untouched for 90+ days; one item per folder.
-    fn old_node_modules(&self, roots: &[PathBuf], now: u64) -> Usage {
-        let mut total = Usage::default();
+    /// `node_modules` folders whose parent was untouched for 90+ days, handed to `visit`.
+    /// Returns a `Usage` whose only meaning is the `incomplete` flag.
+    pub(crate) fn each_old_node_modules(
+        &self,
+        roots: &[PathBuf],
+        now: u64,
+        visit: &mut dyn FnMut(&Path),
+    ) -> Usage {
+        let mut flags = Usage::default();
         let mut pending: Vec<(PathBuf, Option<u64>, u32)> = Vec::new();
         for root in roots {
             match self.fs.stat(root) {
@@ -346,14 +382,14 @@ impl Walker<'_> {
                     ..
                 }) => pending.push((root.clone(), modified, 0)),
                 Ok(_) | Err(ScanError::NotFound) => {}
-                Err(ScanError::Io(_)) => total.incomplete = true,
+                Err(ScanError::Io(_)) => flags.incomplete = true,
             }
         }
         while let Some((dir, modified, depth)) = pending.pop() {
             if self.cancelled() {
                 break;
             }
-            for entry in self.list(&dir, &mut total) {
+            for entry in self.list(&dir, &mut flags) {
                 let EntryKind::Dir {
                     modified: child_mtime,
                 } = entry.kind
@@ -362,14 +398,26 @@ impl Walker<'_> {
                 };
                 if entry.name() == "node_modules" {
                     if is_old(modified, now, NODE_MODULES_MIN_AGE_SECS) {
-                        let mut found = self.usage(&entry.path, now, None);
-                        found.items = 1;
-                        total.add(found);
+                        visit(&entry.path);
                     }
                 } else if depth < PROJECT_MAX_DEPTH && !skipped_project_dir(entry.name()) {
                     pending.push((entry.path, child_mtime, depth + 1));
                 }
             }
+        }
+        flags
+    }
+
+    /// One item per old `node_modules` folder.
+    fn old_node_modules(&self, roots: &[PathBuf], now: u64) -> Usage {
+        let mut total = Usage::default();
+        let mut found = Vec::new();
+        let flags = self.each_old_node_modules(roots, now, &mut |p| found.push(p.to_path_buf()));
+        total.incomplete = flags.incomplete;
+        for path in found {
+            let mut folder = self.usage(&path, now, None);
+            folder.items = 1;
+            total.add(folder);
         }
         total
     }

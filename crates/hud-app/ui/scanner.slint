@@ -11,16 +11,24 @@ export struct CleanRow {
 
 export component Scanner inherits Window {
     title: "Limpeza de disco";
-    width: 460px;
+    width: 540px;
     height: 460px;
     background: #0A0E14;
     in property <[CleanRow]> rows;
     in property <string> total;
     in property <string> status;
     in property <bool> scanning;
+    in property <bool> can-remove;
+    in property <string> phase: "list";
+    in property <string> headline;
+    in property <[string]> lines;
     callback toggle(int);
     callback rescan();
     callback dismiss();
+    callback ask-remove();
+    callback confirm-remove();
+    callback cancel-remove();
+    callback finish();
 
     Text {
         x: 16px;
@@ -123,11 +131,31 @@ export component Scanner inherits Window {
     Text {
         x: 16px;
         y: root.height - 30px;
-        text: "Somente leitura: nada é apagado nesta versão.";
+        text: "Os itens vão para a Lixeira e podem ser restaurados.";
         color: Theme.dim;
         font-family: Theme.label-font;
         font-weight: 500;
         font-size: 11px;
+    }
+    TouchArea {
+        x: root.width - 340px;
+        y: root.height - 46px;
+        width: 140px;
+        height: 28px;
+        enabled: root.can-remove;
+        clicked => { root.ask-remove(); }
+        Rectangle {
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: root.can-remove ? Theme.amber : Theme.border;
+            Text {
+                text: "Mover para a Lixeira";
+                color: root.can-remove ? Theme.amber : Theme.dim;
+                font-family: Theme.label-font;
+                font-weight: 600;
+                font-size: 12px;
+            }
+        }
     }
     TouchArea {
         x: root.width - 190px;
@@ -165,6 +193,117 @@ export component Scanner inherits Window {
                 font-family: Theme.label-font;
                 font-weight: 600;
                 font-size: 12px;
+            }
+        }
+    }
+
+    if root.phase != "list" : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #0A0E14;
+        TouchArea { }
+        Text {
+            x: 16px;
+            y: 14px;
+            text: root.phase == "confirm" ? "CONFIRMAR LIMPEZA" : root.phase == "running" ? "LIMPANDO" : "RESULTADO";
+            color: Theme.teal;
+            font-family: Theme.label-font;
+            font-weight: 600;
+            font-size: 14px;
+            letter-spacing: 1.5px;
+        }
+        Text {
+            x: 16px;
+            y: 40px;
+            width: root.width - 32px;
+            text: root.headline;
+            color: Theme.text;
+            font-family: Theme.label-font;
+            font-weight: 600;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        Text {
+            x: 16px;
+            y: 96px;
+            visible: root.phase == "done" && root.lines.length > 0;
+            text: "Não foi possível mover (arquivos em uso ou sem permissão):";
+            color: Theme.amber;
+            font-family: Theme.label-font;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        for line[i] in root.lines : Text {
+            x: 16px;
+            y: 120px + i * 22px;
+            width: root.width - 32px;
+            text: line;
+            color: Theme.dim;
+            font-family: Theme.label-font;
+            font-weight: 500;
+            font-size: 12px;
+            overflow: elide;
+        }
+        TouchArea {
+            x: root.width - 220px;
+            y: root.height - 46px;
+            width: 100px;
+            height: 28px;
+            visible: root.phase == "confirm";
+            clicked => { root.confirm-remove(); }
+            Rectangle {
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.amber;
+                Text {
+                    text: "Confirmar";
+                    color: Theme.amber;
+                    font-family: Theme.label-font;
+                    font-weight: 600;
+                    font-size: 12px;
+                }
+            }
+        }
+        TouchArea {
+            x: root.width - 110px;
+            y: root.height - 46px;
+            width: 94px;
+            height: 28px;
+            visible: root.phase == "confirm" || root.phase == "running";
+            clicked => { root.cancel-remove(); }
+            Rectangle {
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.border;
+                Text {
+                    text: root.phase == "running" ? "Interromper" : "Cancelar";
+                    color: Theme.teal;
+                    font-family: Theme.label-font;
+                    font-weight: 600;
+                    font-size: 12px;
+                }
+            }
+        }
+        TouchArea {
+            x: root.width - 110px;
+            y: root.height - 46px;
+            width: 94px;
+            height: 28px;
+            visible: root.phase == "done";
+            clicked => { root.finish(); }
+            Rectangle {
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.border;
+                Text {
+                    text: "OK";
+                    color: Theme.teal;
+                    font-family: Theme.label-font;
+                    font-weight: 600;
+                    font-size: 12px;
+                }
             }
         }
     }

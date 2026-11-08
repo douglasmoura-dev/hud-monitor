@@ -3,6 +3,8 @@
 use hud_core::integration::{Backdrop, IntegrationError, RunKey};
 use hud_core::metrics::{Date, DiskIo};
 use hud_core::position::Size;
+use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
@@ -10,6 +12,10 @@ use windows::Win32::NetworkManagement::IpHelper::{
     IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho, ICMP_ECHO_REPLY,
 };
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, IBindCtx, CLSCTX_ALL,
+    COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW,
@@ -23,7 +29,12 @@ use windows::Win32::System::Registry::{
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
-use windows::Win32::UI::Shell::{SHQueryRecycleBinW, SHQUERYRBINFO};
+use windows::Win32::UI::Shell::{
+    FileOperation, IFileOperation, IFileOperationProgressSink, IShellItem,
+    SHCreateItemFromParsingName, SHEmptyRecycleBinW, SHQueryRecycleBinW, FILEOPERATION_FLAGS,
+    FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING,
+    SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND, SHQUERYRBINFO,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, SM_CXSCREEN, SM_CYSCREEN,
 };
@@ -83,6 +94,85 @@ pub fn recycle_bin_info() -> Result<(u64, u64), String> {
         u64::try_from(info.i64Size).map_err(|e| e.to_string())?,
         u64::try_from(info.i64NumItems).map_err(|e| e.to_string())?,
     ))
+}
+
+/// Keeps COM initialised on this thread; uninitialises on drop.
+struct ComScope;
+
+impl ComScope {
+    fn enter() -> Result<Self, String> {
+        // SAFETY: plain per-thread COM initialisation; the matching CoUninitialize is in Drop,
+        // and only runs when this call succeeded.
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+        hr.ok().map_err(|e| format!("COM indisponível: {e}"))?;
+        Ok(Self)
+    }
+}
+
+impl Drop for ComScope {
+    fn drop(&mut self) {
+        // SAFETY: balances the successful CoInitializeEx in `enter` on the same thread.
+        unsafe { CoUninitialize() };
+    }
+}
+
+fn wide_path(path: &std::path::Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+/// Flags that send items to the Recycle Bin and nothing else: undo information is kept and
+/// the shell must recycle on delete. There is no "no confirmation" flag, so a delete that
+/// would be permanent (item too big for the bin) asks instead of silently destroying data.
+fn recycle_flags() -> FILEOPERATION_FLAGS {
+    FILEOPERATION_FLAGS(
+        FOF_ALLOWUNDO.0
+            | FOFX_RECYCLEONDELETE.0
+            | FOF_NOERRORUI.0
+            | FOF_SILENT.0
+            | FOF_WANTNUKEWARNING.0,
+    )
+}
+
+/// Sends every path to the Recycle Bin with one `IFileOperation`. Items that cannot be queued
+/// (missing, no access) are left alone; the caller checks which ones are still on disk.
+pub fn recycle_paths(paths: &[PathBuf]) -> Result<(), String> {
+    let _com = ComScope::enter()?;
+    // SAFETY: COM is initialised on this thread (`_com`). `operation` and every `IShellItem` are
+    // owned smart pointers released on drop; each `wide` buffer is NUL-terminated and outlives
+    // the call that reads it. Only DeleteItem with recycle flags is queued, never a permanent
+    // delete.
+    unsafe {
+        let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)
+            .map_err(|e| format!("IFileOperation indisponível: {e}"))?;
+        operation
+            .SetOperationFlags(recycle_flags())
+            .map_err(|e| format!("flags da operação: {e}"))?;
+        for path in paths {
+            let wide = wide_path(path);
+            let item: Result<IShellItem, _> =
+                SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>);
+            if let Ok(item) = item {
+                let _ = operation.DeleteItem(&item, None::<&IFileOperationProgressSink>);
+            }
+        }
+        operation
+            .PerformOperations()
+            .map_err(|e| format!("Lixeira recusou a operação: {e}"))
+    }
+}
+
+/// Empties the Recycle Bin of every drive without confirmation or progress UI. Only call it
+/// after the user confirmed the "Lixeira" category.
+pub fn empty_recycle_bin() -> Result<(), String> {
+    // SAFETY: a null window and a null root path mean "all drives"; no pointers are retained.
+    unsafe {
+        SHEmptyRecycleBinW(
+            None,
+            PCWSTR::null(),
+            SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND,
+        )
+    }
+    .map_err(|e| format!("Lixeira não pôde ser esvaziada: {e}"))
 }
 
 /// Current local date and seconds elapsed since local midnight.

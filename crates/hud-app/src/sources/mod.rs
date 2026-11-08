@@ -8,7 +8,7 @@ mod sys;
 mod win;
 
 pub use claude::{FileCredentials, JsonlScanner, UreqApi};
-pub use cleanup::{env_roots, StdFs, WinSystem};
+pub use cleanup::{env_roots, ShellRecycler, StdFs, WinSystem};
 pub use day_store::FileDayStore;
 pub use extras::{ollama_up, CursorNoSource, GeminiLogs, PathProbe};
 pub use sys::SysinfoSource;

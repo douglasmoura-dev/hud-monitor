@@ -583,12 +583,14 @@ mod tests {
     }
 
     #[test]
-    fn scanner_screen_uses_theme_fonts_and_is_read_only() {
+    fn scanner_screen_uses_theme_fonts_and_asks_before_moving() {
         assert!(!families(SCANNER).is_empty());
         assert!(families(SCANNER)
             .iter()
             .all(|f| matches!(*f, "Theme.label-font" | "Theme.number-font")));
-        assert!(SCANNER.contains("Somente leitura"));
+        assert!(SCANNER.contains("Mover para a Lixeira"));
+        assert!(SCANNER.contains("root.confirm-remove()"));
+        assert!(!SCANNER.contains("Somente leitura"));
         assert!(SCANNER.contains("row.review"));
         assert!(HUD.contains("Scanner"));
     }
