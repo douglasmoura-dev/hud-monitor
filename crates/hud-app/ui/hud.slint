@@ -105,7 +105,7 @@ export component Hud inherits Window {
         Rectangle {
             y: 0px;
             height: 30px;
-            background: #FFFFFF0A;
+            background: Theme.title-bar;
             TouchArea {
                 moved => { root.moved(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
                 pointer-event(e) => { if e.kind == PointerEventKind.up { root.released(); } }
@@ -225,7 +225,7 @@ export component Hud inherits Window {
             visible: root.hover-tip != "";
             y: parent.height - 22px;
             height: 22px;
-            background: #0E1620;
+            background: Theme.tip-bar;
             Text {
                 x: 12px;
                 width: parent.width - 24px;
