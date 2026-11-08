@@ -1,13 +1,15 @@
-//! Real filesystem and system probes for the read-only cleanup scanner.
-//! Nothing here writes: it lists directories and reads metadata without following links.
+//! Real filesystem and system probes for the cleanup scanner, plus the Recycle Bin backend.
+//! Scanning only lists directories and reads metadata without following links; the only thing
+//! that ever changes the disk is `ShellRecycler`, which sends items to the Recycle Bin.
 
 use crate::winffi;
 use hud_core::cleanup::{Entry, EntryKind, ScanError, ScanFs, SystemProbe, Usage};
+use hud_core::removal::Recycler;
 use std::{
     fs::{self, Metadata},
     io::ErrorKind,
     os::windows::fs::MetadataExt,
-    path::Path,
+    path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
 
@@ -91,6 +93,66 @@ impl SystemProbe for WinSystem {
             items,
             incomplete: false,
         })
+    }
+}
+
+/// Real Recycle Bin backend (`IFileOperation` with recycle-on-delete).
+pub struct ShellRecycler;
+
+const LINK_REASON: &str = "é um link ou junção; não é seguido";
+const GONE_REASON: &str = "já não existe";
+const STUCK_REASON: &str = "em uso por outro programa ou sem permissão";
+
+/// Checked right before recycling: only plain files and folders are handed to the shell.
+fn eligible(path: &Path) -> Result<(), String> {
+    match StdFs.stat(path) {
+        Ok(Entry {
+            kind: EntryKind::Link,
+            ..
+        }) => Err(LINK_REASON.to_owned()),
+        Ok(_) => Ok(()),
+        Err(ScanError::NotFound) => Err(GONE_REASON.to_owned()),
+        Err(ScanError::Io(reason)) => Err(reason),
+    }
+}
+
+fn still_there(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+impl Recycler for ShellRecycler {
+    fn recycle(&self, paths: &[PathBuf]) -> Vec<Result<(), String>> {
+        let checked: Vec<Result<(), String>> = paths.iter().map(|p| eligible(p)).collect();
+        let queued: Vec<PathBuf> = paths
+            .iter()
+            .zip(&checked)
+            .filter(|(_, ok)| ok.is_ok())
+            .map(|(p, _)| p.clone())
+            .collect();
+        let call = if queued.is_empty() {
+            Ok(())
+        } else {
+            winffi::recycle_paths(&queued)
+        };
+        paths
+            .iter()
+            .zip(checked)
+            .map(|(path, check)| {
+                check?;
+                if still_there(path) {
+                    Err(call
+                        .clone()
+                        .err()
+                        .unwrap_or_else(|| STUCK_REASON.to_owned()))
+                } else {
+                    Ok(())
+                }
+            })
+            .collect()
+    }
+
+    fn empty_recycle_bin(&self) -> Result<(), String> {
+        winffi::empty_recycle_bin()
     }
 }
 
@@ -220,6 +282,95 @@ mod tests {
     fn recycle_bin_query_answers_or_explains() {
         if let Err(reason) = WinSystem.recycle_bin() {
             assert!(!reason.is_empty());
+        }
+    }
+
+    fn bin_items() -> Option<u64> {
+        winffi::recycle_bin_info().ok().map(|(_, items)| items)
+    }
+
+    #[test]
+    fn real_recycle_moves_temp_files_and_a_folder_into_the_recycle_bin() {
+        let base = temp_dir("recycle");
+        let mut paths = Vec::new();
+        for name in ["a.tmp", "b.tmp", "c.tmp"] {
+            let file = base.join(name);
+            fs::write(&file, b"hud-monitor test file").expect("file");
+            paths.push(file);
+        }
+        let folder = base.join("node_modules");
+        fs::create_dir_all(folder.join("pkg")).expect("folder");
+        fs::write(folder.join("pkg").join("index.js"), b"x").expect("inner");
+        paths.push(folder);
+        let before = bin_items();
+        let results = ShellRecycler.recycle(&paths);
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert!(
+            paths.iter().all(|p| !p.exists()),
+            "items must leave the disk"
+        );
+        if let (Some(before), Some(after)) = (before, bin_items()) {
+            assert!(after >= before + 4, "bin {before} -> {after}");
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn real_recycle_skips_a_file_locked_by_another_handle_and_moves_the_rest() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let base = temp_dir("locked");
+        let locked = base.join("locked.tmp");
+        let free = base.join("free.tmp");
+        fs::write(&locked, b"locked").expect("locked");
+        fs::write(&free, b"free").expect("free");
+        let _holder = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&locked)
+            .expect("lock");
+        let results = ShellRecycler.recycle(&[locked.clone(), free.clone()]);
+        assert!(results[0].is_err(), "locked item must be reported");
+        assert!(locked.exists());
+        assert!(results[1].is_ok(), "{results:?}");
+        assert!(!free.exists());
+        drop(_holder);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn real_recycle_never_follows_a_junction_and_reports_missing_items() {
+        let (base, outside, scanned) = tree_with_outside_data("recycle-junction");
+        let link = scanned.join("link");
+        assert!(make_junction(&link, &outside), "mklink /J");
+        let missing = scanned.join("gone.tmp");
+        let results = ShellRecycler.recycle(&[link.clone(), missing]);
+        assert_eq!(results[0], Err(LINK_REASON.to_owned()));
+        assert_eq!(results[1], Err(GONE_REASON.to_owned()));
+        assert!(
+            outside.join("big.bin").exists(),
+            "junction target untouched"
+        );
+        assert!(link.exists(), "the junction itself was not touched");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn app_code_has_no_permanent_deletion_calls() {
+        let sources = [include_str!("cleanup.rs"), include_str!("../winffi.rs")];
+        for src in sources {
+            let code = src.split("#[cfg(test)]").next().unwrap_or_default();
+            for forbidden in [
+                "remove_file",
+                "remove_dir",
+                "DeleteFileW",
+                "RemoveDirectoryW",
+            ] {
+                assert!(!code.contains(forbidden), "{forbidden}");
+            }
+            assert!(
+                !code.contains("FOF_NOCONFIRMATION"),
+                "silent permanent delete risk"
+            );
         }
     }
 }
