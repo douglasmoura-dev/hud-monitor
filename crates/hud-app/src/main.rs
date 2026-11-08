@@ -83,6 +83,12 @@ fn show_claude(hud: &Hud, v: &view::ClaudeView) {
     hud.set_claude_7d(limit(&v.week));
 }
 
+fn show_codex(hud: &Hud, listed: bool, v: &view::ClaudeView) {
+    hud.set_codex_listed(listed);
+    hud.set_codex_5h(limit(&v.five));
+    hud.set_codex_7d(limit(&v.week));
+}
+
 fn show_clock(hud: &Hud) {
     let (_, secs) = winffi::local_now();
     hud.set_clock(format!("{:02}:{:02}", secs / 3600, secs / 60 % 60).into());
@@ -265,6 +271,8 @@ fn run() -> Result<(), AppError> {
     let claude_waiting =
         view::claude_view(&Metric::unavailable(ai::WAITING), 0, &config.thresholds);
     show_claude(&hud, &claude_waiting);
+    let codex_waiting = view::codex_view(&Metric::unavailable(ai::WAITING), 0);
+    show_codex(&hud, false, &codex_waiting);
     show_clock(&hud);
     let items = config.minibar.items.clone();
     bar.set_chips(chip_model(&view::minibar_chips(
@@ -272,6 +280,7 @@ fn run() -> Result<(), AppError> {
         &waiting,
         &config.thresholds,
         &claude_waiting,
+        &codex_waiting,
     )));
     hud.set_bg_alpha(effective_opacity(config.hud.opacity));
     hud.set_pinned(config.hud.click_through);
@@ -348,6 +357,7 @@ fn run() -> Result<(), AppError> {
     let (snapshots, collection) = collect::spawn();
     let (claude_updates, claude_poller) = ai::spawn();
     let claude_state = RefCell::new(Metric::unavailable(ai::WAITING));
+    let codex_state = RefCell::new(Metric::unavailable(ai::WAITING));
     let looks = Rc::new((NativeLook::default(), NativeLook::default()));
     let refresh_looks = {
         let (w, looks) = (w.clone(), looks.clone());
@@ -386,18 +396,23 @@ fn run() -> Result<(), AppError> {
                     (c.minibar.items.clone(), c.thresholds.clone())
                 };
                 if let Some(latest) = claude_updates.try_iter().last() {
-                    *claude_state.borrow_mut() = latest;
+                    *claude_state.borrow_mut() = latest.claude;
+                    *codex_state.borrow_mut() = latest.codex;
                 }
                 let claude = claude_state.borrow();
                 let claude_now =
                     view::claude_view(&claude, ai::unix_now().unwrap_or(0), &thresholds);
                 show_snapshot(&hud, &s, &thresholds);
                 show_claude(&hud, &claude_now);
+                let codex = codex_state.borrow();
+                let codex_now = view::codex_view(&codex, ai::unix_now().unwrap_or(0));
+                show_codex(&hud, view::codex_listed(&codex), &codex_now);
                 bar.set_chips(chip_model(&view::minibar_chips(
                     &items,
                     &s,
                     &thresholds,
                     &claude_now,
+                    &codex_now,
                 )));
                 let crit = evaluate(&s, &thresholds).any_crit()
                     || claude_level(&claude, &thresholds) == Level::Crit;
@@ -500,9 +515,13 @@ mod tests {
 
     #[test]
     fn slint_window_size_matches_hud_size() {
-        use hud_core::config::HUD_SIZE;
+        use hud_core::config::{HUD_BASE_HEIGHT, HUD_SIZE};
         assert!(HUD.contains(&format!("width: {}px;", HUD_SIZE.width)));
-        assert!(HUD.contains(&format!("height: {}px;", HUD_SIZE.height)));
+        // HUD_SIZE is the tallest layout (Codex listed); without Codex the window is shorter.
+        assert!(HUD.contains(&format!(
+            "height: root.codex-listed ? {}px : {}px;",
+            HUD_SIZE.height, HUD_BASE_HEIGHT
+        )));
     }
 
     #[test]

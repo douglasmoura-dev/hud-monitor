@@ -102,7 +102,7 @@ export component Hud inherits Window {
     always-on-top: true;
     background: transparent;
     width: 320px;
-    height: 500px;
+    height: root.codex-listed ? 566px : 500px;
     callback moved(length, length);
     callback released();
     callback quit();
@@ -133,6 +133,9 @@ export component Hud inherits Window {
     in property <string> claude-plan;
     in property <Limit> claude-5h;
     in property <Limit> claude-7d;
+    in property <bool> codex-listed;
+    in property <Limit> codex-5h;
+    in property <Limit> codex-7d;
     property <string> hover-tip;
 
     Rectangle {
@@ -308,6 +311,21 @@ export component Hud inherits Window {
         }
         LimitRow { x: 12px; y: 430px; width: parent.width - 24px; name: "5H"; limit: root.claude-5h; tint: Theme.teal; tip(s) => { root.hover-tip = s; } }
         LimitRow { x: 12px; y: 452px; width: parent.width - 24px; name: "SEMANA"; limit: root.claude-7d; tint: Theme.blue; tip(s) => { root.hover-tip = s; } }
+
+        if root.codex-listed : Rectangle {
+            Text {
+                x: 12px;
+                y: 478px;
+                text: "CODEX";
+                color: Theme.text;
+                font-family: Theme.label-font;
+                font-weight: 600;
+                font-size: 13px;
+                letter-spacing: 1px;
+            }
+            LimitRow { x: 12px; y: 500px; width: root.width - 24px; name: "5H"; limit: root.codex-5h; tint: Theme.teal; tip(s) => { root.hover-tip = s; } }
+            LimitRow { x: 12px; y: 522px; width: root.width - 24px; name: "SEMANA"; limit: root.codex-7d; tint: Theme.blue; tip(s) => { root.hover-tip = s; } }
+        }
 
         // Reason for an unavailable value, shown while it is hovered.
         Rectangle {

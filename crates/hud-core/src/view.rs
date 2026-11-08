@@ -259,10 +259,24 @@ fn limit(r: &Reading, tip: &str, now: i64, t: Option<Threshold>) -> Limit {
 
 /// Claude row for the HUD and chips. Only the 5 h window alerts.
 pub fn claude_view(state: &ClaudeState, now: i64, t: &Thresholds) -> ClaudeView {
+    provider_view(state, now, Some(t.claude_5h))
+}
+
+/// Codex row. It has no threshold of its own, so it never alerts.
+pub fn codex_view(state: &ClaudeState, now: i64) -> ClaudeView {
+    provider_view(state, now, None)
+}
+
+/// The Codex row is hidden only when `auth.json` is missing; any other failure shows `—`.
+pub fn codex_listed(state: &ClaudeState) -> bool {
+    !matches!(state, Metric::Unavailable(r) if r == crate::ai::CODEX_NOT_FOUND)
+}
+
+fn provider_view(state: &ClaudeState, now: i64, five_threshold: Option<Threshold>) -> ClaudeView {
     match state {
         Metric::Available(s) => ClaudeView {
             plan: s.plan.clone().unwrap_or_default(),
-            five: limit(&s.five_hour, &s.tip, now, Some(t.claude_5h)),
+            five: limit(&s.five_hour, &s.tip, now, five_threshold),
             week: limit(&s.seven_day, &s.tip, now, None),
         },
         Metric::Unavailable(reason) => {
@@ -306,10 +320,12 @@ fn chip_label(item: MiniBarItem) -> &'static str {
         MiniBarItem::Disk => "DISCO",
         MiniBarItem::Claude5h => "5H",
         MiniBarItem::Claude7d => "7D",
+        MiniBarItem::Codex5h => "CX5H",
+        MiniBarItem::Codex7d => "CX7D",
     }
 }
 
-fn chip_value(item: MiniBarItem, v: &HudView, c: &ClaudeView) -> Field {
+fn chip_value(item: MiniBarItem, v: &HudView, c: &ClaudeView, x: &ClaudeView) -> Field {
     match item {
         MiniBarItem::Cpu => v.cpu_total.clone(),
         MiniBarItem::Ram => percent_field(&v.ram, v.ram_percent, v.ram.level),
@@ -320,6 +336,8 @@ fn chip_value(item: MiniBarItem, v: &HudView, c: &ClaudeView) -> Field {
         MiniBarItem::Disk => percent_field(&v.disk, v.disk_percent, Level::Ok),
         MiniBarItem::Claude5h => chip_limit(&c.five),
         MiniBarItem::Claude7d => chip_limit(&c.week),
+        MiniBarItem::Codex5h => chip_limit(&x.five),
+        MiniBarItem::Codex7d => chip_limit(&x.week),
     }
 }
 
@@ -348,13 +366,14 @@ pub fn minibar_chips(
     s: &Snapshot,
     t: &Thresholds,
     claude: &ClaudeView,
+    codex: &ClaudeView,
 ) -> Vec<Chip> {
     let v = build_alerted(s, t);
     items
         .iter()
         .map(|&item| Chip {
             label: chip_label(item),
-            value: chip_value(item, &v, claude),
+            value: chip_value(item, &v, claude, codex),
         })
         .collect()
 }
@@ -479,6 +498,7 @@ mod tests {
             &s,
             &thresholds(),
             &ClaudeView::default(),
+            &ClaudeView::default(),
         );
         assert_eq!(chips[0].value.level, Level::Crit);
         assert_eq!(chips[1].value.level, Level::Warn);
@@ -565,6 +585,7 @@ mod tests {
             &snapshot(vec![10.0]),
             &thresholds(),
             &claude_view(&Metric::unavailable("sem login"), NOW, &thresholds()),
+            &ClaudeView::default(),
         );
         let labels: Vec<_> = chips.iter().map(|c| c.label).collect();
         assert_eq!(labels, ["CPU", "RAM", "NET", "5H"]);
@@ -582,6 +603,7 @@ mod tests {
             &[Temp, Ram],
             &Snapshot::unavailable("coleta falhou"),
             &thresholds(),
+            &ClaudeView::default(),
             &ClaudeView::default(),
         );
         assert!(chips.iter().all(|c| c.value.text == "—"));
@@ -640,6 +662,7 @@ mod tests {
             &s,
             &t,
             &claude_view(&official(), NOW, &t),
+            &ClaudeView::default(),
         );
         assert_eq!(
             (ok[0].value.text.as_str(), ok[1].value.text.as_str()),
@@ -651,6 +674,7 @@ mod tests {
             &s,
             &t,
             &claude_view(&estimate(1_200_000, 0), NOW, &t),
+            &ClaudeView::default(),
         );
         assert_eq!(est[0].value.text, "~1.2M");
     }
@@ -665,5 +689,78 @@ mod tests {
         assert_eq!(v.plan, "");
         assert_eq!(v.five.pct.text, "—");
         assert_eq!(v.week.pct.tip, "Claude Code não encontrado");
+    }
+
+    fn codex_ok() -> ClaudeState {
+        Metric::Available(ProviderStatus {
+            plan: None,
+            five_hour: Reading::Official {
+                percent: 23.0,
+                resets_at: NOW + 11_400,
+            },
+            seven_day: Reading::Official {
+                percent: 58.0,
+                resets_at: NOW + 432_000,
+            },
+            tip: String::new(),
+        })
+    }
+
+    #[test]
+    fn codex_row_shows_5h_and_semana_and_never_alerts() {
+        let v = codex_view(&codex_ok(), NOW);
+        assert_eq!(
+            (v.five.pct.text.as_str(), v.five.reset.as_str()),
+            ("23%", "3h10")
+        );
+        assert_eq!(
+            (v.week.pct.text.as_str(), v.week.reset.as_str()),
+            ("58%", "5d")
+        );
+        let hot = Metric::Available(ProviderStatus {
+            five_hour: Reading::Official {
+                percent: 99.0,
+                resets_at: NOW + 60,
+            },
+            ..codex_ok().available().cloned().unwrap()
+        });
+        assert_eq!(codex_view(&hot, NOW).five.pct.level, Level::Ok);
+    }
+
+    #[test]
+    fn codex_is_listed_unless_auth_json_is_missing() {
+        assert!(codex_listed(&codex_ok()));
+        assert!(codex_listed(&Metric::unavailable(
+            "abra o Codex para renovar o login"
+        )));
+        assert!(!codex_listed(&Metric::unavailable("Codex não encontrado")));
+    }
+
+    #[test]
+    fn expired_codex_login_is_dash_with_renew_tip() {
+        let v = codex_view(
+            &Metric::unavailable("abra o Codex para renovar o login"),
+            NOW,
+        );
+        assert_eq!(v.five.pct.text, "—");
+        assert_eq!(v.week.pct.tip, "abra o Codex para renovar o login");
+    }
+
+    #[test]
+    fn codex_chips_use_their_own_view() {
+        use MiniBarItem::*;
+        let t = thresholds();
+        let chips = minibar_chips(
+            &[Claude5h, Codex5h, Codex7d],
+            &snapshot(vec![1.0]),
+            &t,
+            &claude_view(&official(), NOW, &t),
+            &codex_view(&codex_ok(), NOW),
+        );
+        let got: Vec<_> = chips
+            .iter()
+            .map(|c| (c.label, c.value.text.as_str()))
+            .collect();
+        assert_eq!(got, [("5H", "72%"), ("CX5H", "23%"), ("CX7D", "58%")]);
     }
 }

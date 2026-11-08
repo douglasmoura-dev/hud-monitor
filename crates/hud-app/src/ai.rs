@@ -1,7 +1,7 @@
 //! Background poller for the Claude limits: one fetch every 60 s, results sent to the UI thread.
 
 use crate::sources::{FileCredentials, JsonlScanner, UreqApi};
-use hud_core::ai::{claude_state, ClaudeProvider};
+use hud_core::ai::{claude_state, codex_state, ClaudeProvider, CodexProvider};
 use hud_core::metrics::Metric;
 use hud_core::view::ClaudeState;
 use std::{
@@ -13,6 +13,12 @@ use std::{
 
 const POLL_EVERY: Duration = Duration::from_secs(60);
 pub const WAITING: &str = "aguardando a primeira leitura";
+
+/// Latest state of every AI provider.
+pub struct AiUpdate {
+    pub claude: ClaudeState,
+    pub codex: ClaudeState,
+}
 
 pub struct Poller {
     stop: Sender<()>,
@@ -36,18 +42,20 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").map(PathBuf::from)
 }
 
-pub fn spawn() -> (Receiver<ClaudeState>, Poller) {
+pub fn spawn() -> (Receiver<AiUpdate>, Poller) {
     let (tx, rx) = mpsc::channel();
     let (stop, stop_rx) = mpsc::channel();
     let worker = thread::spawn(move || poll_loop(&tx, &stop_rx));
     (rx, Poller { stop, worker })
 }
 
-fn poll_loop(tx: &Sender<ClaudeState>, stop: &Receiver<()>) {
+fn poll_loop(tx: &Sender<AiUpdate>, stop: &Receiver<()>) {
     let (Some(home), Some(_)) = (home(), unix_now()) else {
-        let _ = tx.send(Metric::unavailable(
-            "pasta do usuário ou relógio indisponível",
-        ));
+        let reason = "pasta do usuário ou relógio indisponível";
+        let _ = tx.send(AiUpdate {
+            claude: Metric::unavailable(reason),
+            codex: Metric::unavailable(reason),
+        });
         return;
     };
     let provider = ClaudeProvider {
@@ -55,12 +63,22 @@ fn poll_loop(tx: &Sender<ClaudeState>, stop: &Receiver<()>) {
         api: UreqApi::new(),
         transcripts: JsonlScanner::new(JsonlScanner::default_root(&home)),
     };
+    let codex = CodexProvider {
+        credentials: FileCredentials::new(FileCredentials::codex_path(&home)),
+        api: UreqApi::new(),
+    };
     loop {
-        let state = match unix_now() {
-            Some(now) => claude_state(&provider, now),
-            None => Metric::unavailable("relógio indisponível"),
+        let update = match unix_now() {
+            Some(now) => AiUpdate {
+                claude: claude_state(&provider, now),
+                codex: codex_state(&codex, now),
+            },
+            None => AiUpdate {
+                claude: Metric::unavailable("relógio indisponível"),
+                codex: Metric::unavailable("relógio indisponível"),
+            },
         };
-        if tx.send(state).is_err() {
+        if tx.send(update).is_err() {
             break;
         }
         if stop.recv_timeout(POLL_EVERY) != Err(RecvTimeoutError::Timeout) {
