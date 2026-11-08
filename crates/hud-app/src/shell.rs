@@ -30,6 +30,7 @@ pub enum TrayAction {
     ShowHud,
     ShowMinibar,
     Profile(String),
+    Scanner,
     Quit,
 }
 
@@ -37,6 +38,7 @@ pub struct Tray {
     icon: TrayIcon,
     show_hud: MenuItem,
     show_minibar: MenuItem,
+    scanner: MenuItem,
     quit: MenuItem,
     profiles: Vec<(MenuItem, String)>,
 }
@@ -60,6 +62,7 @@ impl Tray {
     pub fn new(profiles: &[Profile]) -> Result<Self, ShellError> {
         let show_hud = MenuItem::new("Mostrar HUD", true, None);
         let show_minibar = MenuItem::new("Mostrar barrinha", true, None);
+        let scanner = MenuItem::new("Limpeza de disco...", true, None);
         let quit = MenuItem::new("Sair", true, None);
         let submenu = Submenu::new("Perfis", !profiles.is_empty());
         let items: Vec<(MenuItem, String)> = profiles
@@ -74,6 +77,7 @@ impl Tray {
             &show_hud,
             &show_minibar,
             &submenu,
+            &scanner,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -88,6 +92,7 @@ impl Tray {
             icon,
             show_hud,
             show_minibar,
+            scanner,
             quit,
             profiles: items,
         })
@@ -112,6 +117,8 @@ impl Tray {
             Some(TrayAction::ShowHud)
         } else if *id == *self.show_minibar.id() {
             Some(TrayAction::ShowMinibar)
+        } else if *id == *self.scanner.id() {
+            Some(TrayAction::Scanner)
         } else if *id == *self.quit.id() {
             Some(TrayAction::Quit)
         } else {

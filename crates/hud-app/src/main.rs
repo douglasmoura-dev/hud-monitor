@@ -2,6 +2,7 @@
 
 mod ai;
 mod collect;
+mod scanner;
 mod shell;
 mod sources;
 mod store;
@@ -149,6 +150,7 @@ struct Windows {
     bar: slint::Weak<MiniBar>,
     path: Rc<PathBuf>,
     config: Rc<RefCell<Config>>,
+    scanner: scanner::Slot,
 }
 
 impl Windows {
@@ -254,6 +256,7 @@ impl Windows {
             TrayAction::ShowHud => self.switch_to(false),
             TrayAction::ShowMinibar => self.switch_to(true),
             TrayAction::Profile(name) => self.switch_profile(&name),
+            TrayAction::Scanner => scanner::open(&self.scanner),
             TrayAction::Quit => self.quit(),
         }
     }
@@ -349,7 +352,11 @@ fn run() -> Result<(), AppError> {
         bar: bar.as_weak(),
         path,
         config: Rc::new(RefCell::new(config)),
+        scanner: scanner::Slot::default(),
     };
+    if std::env::args().any(|a| a == "--scanner") {
+        scanner::open(&w.scanner);
+    }
     let weak = hud.as_weak();
     hud.on_moved(move |dx, dy| {
         if let Some(hud) = weak.upgrade() {
@@ -506,6 +513,7 @@ mod tests {
     const HUD: &str = include_str!("../ui/hud.slint");
     const THEME: &str = include_str!("../ui/theme.slint");
     const MINIBAR: &str = include_str!("../ui/minibar.slint");
+    const SCANNER: &str = include_str!("../ui/scanner.slint");
 
     fn families(src: &str) -> Vec<&str> {
         src.lines()
@@ -572,6 +580,17 @@ mod tests {
         assert!(MINIBAR.contains("root.vertical ? 30px + i * 40px : 6px"));
         assert!(MINIBAR.contains("root.expand()"));
         assert!(HUD.contains("root.minimize()"));
+    }
+
+    #[test]
+    fn scanner_screen_uses_theme_fonts_and_is_read_only() {
+        assert!(!families(SCANNER).is_empty());
+        assert!(families(SCANNER)
+            .iter()
+            .all(|f| matches!(*f, "Theme.label-font" | "Theme.number-font")));
+        assert!(SCANNER.contains("Somente leitura"));
+        assert!(SCANNER.contains("row.review"));
+        assert!(HUD.contains("Scanner"));
     }
 
     #[test]
