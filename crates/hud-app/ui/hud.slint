@@ -1,4 +1,4 @@
-import { Bar, Field, Limit, Theme } from "theme.slint";
+import { Bar, Field, Limit, PresenceData, Theme } from "theme.slint";
 import { MiniBar } from "minibar.slint";
 
 export { MiniBar }
@@ -102,7 +102,11 @@ export component Hud inherits Window {
     always-on-top: true;
     background: transparent;
     width: 320px;
-    height: root.codex-listed ? 566px : 500px;
+    private property <length> gemini-y: 478px + (root.codex-listed ? 66px : 0px);
+    private property <length> cursor-y: root.gemini-y + (root.gemini-listed ? 44px : 0px);
+    private property <length> others-y: root.cursor-y + (root.cursor-listed ? 44px : 0px);
+    private property <length> others-h: root.presence.length > 0 ? 18px + 20px * root.presence.length : 0px;
+    height: root.others-y + root.others-h + 22px;
     callback moved(length, length);
     callback released();
     callback quit();
@@ -136,6 +140,11 @@ export component Hud inherits Window {
     in property <bool> codex-listed;
     in property <Limit> codex-5h;
     in property <Limit> codex-7d;
+    in property <bool> gemini-listed;
+    in property <Limit> gemini-day;
+    in property <bool> cursor-listed;
+    in property <Limit> cursor-month;
+    in property <[PresenceData]> presence;
     property <string> hover-tip;
 
     Rectangle {
@@ -325,6 +334,62 @@ export component Hud inherits Window {
             }
             LimitRow { x: 12px; y: 500px; width: root.width - 24px; name: "5H"; limit: root.codex-5h; tint: Theme.teal; tip(s) => { root.hover-tip = s; } }
             LimitRow { x: 12px; y: 522px; width: root.width - 24px; name: "SEMANA"; limit: root.codex-7d; tint: Theme.blue; tip(s) => { root.hover-tip = s; } }
+        }
+
+        if root.gemini-listed : Rectangle {
+            Text {
+                x: 12px;
+                y: root.gemini-y;
+                text: "GEMINI";
+                color: Theme.text;
+                font-family: Theme.label-font;
+                font-weight: 600;
+                font-size: 13px;
+                letter-spacing: 1px;
+            }
+            LimitRow { x: 12px; y: root.gemini-y + 22px; width: root.width - 24px; name: "DIA"; limit: root.gemini-day; tint: Theme.purple; tip(s) => { root.hover-tip = s; } }
+        }
+
+        if root.cursor-listed : Rectangle {
+            Text {
+                x: 12px;
+                y: root.cursor-y;
+                text: "CURSOR";
+                color: Theme.text;
+                font-family: Theme.label-font;
+                font-weight: 600;
+                font-size: 13px;
+                letter-spacing: 1px;
+            }
+            LimitRow { x: 12px; y: root.cursor-y + 22px; width: root.width - 24px; name: "MÊS"; limit: root.cursor-month; tint: Theme.blue; tip(s) => { root.hover-tip = s; } }
+        }
+
+        if root.presence.length > 0 : Rectangle {
+            Label { x: 12px; y: root.others-y; text: "OUTROS"; }
+            for row[i] in root.presence : Rectangle {
+                x: 12px;
+                y: root.others-y + 18px + 20px * i;
+                width: root.width - 24px;
+                height: 20px;
+                Text {
+                    width: 90px;
+                    text: row.name;
+                    color: Theme.dim;
+                    font-family: Theme.label-font;
+                    font-weight: 600;
+                    font-size: 11px;
+                    letter-spacing: 1.5px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    x: 100px;
+                    text: row.status;
+                    color: row.status == "inativo" ? Theme.dim : Theme.teal;
+                    font-family: Theme.number-font;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+            }
         }
 
         // Reason for an unavailable value, shown while it is hovered.

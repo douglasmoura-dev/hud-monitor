@@ -9,6 +9,7 @@ mod winffi;
 
 use hud_core::alerts::{claude_level, evaluate, Level};
 use hud_core::config::{Config, Orientation, Thresholds, HUD_SIZE};
+use hud_core::extras::{self, PresenceRow, UsageState};
 use hud_core::integration::{apply_autostart, register_hotkeys, shell_notice, IntegrationError};
 use hud_core::metrics::{Metric, Snapshot};
 use hud_core::position::{clamp_to_screen, Point, Size};
@@ -87,6 +88,22 @@ fn show_codex(hud: &Hud, listed: bool, v: &view::ClaudeView) {
     hud.set_codex_listed(listed);
     hud.set_codex_5h(limit(&v.five));
     hud.set_codex_7d(limit(&v.week));
+}
+
+fn show_extras(hud: &Hud, gemini: &UsageState, cursor: &UsageState, presence: &[PresenceRow]) {
+    let now = ai::unix_now().unwrap_or(0);
+    hud.set_gemini_listed(extras::listed(gemini, extras::GEMINI_NOT_FOUND));
+    hud.set_gemini_day(limit(&extras::usage_limit(gemini, now)));
+    hud.set_cursor_listed(extras::listed(cursor, extras::CURSOR_NOT_FOUND));
+    hud.set_cursor_month(limit(&extras::usage_limit(cursor, now)));
+    let rows: Vec<PresenceData> = presence
+        .iter()
+        .map(|r| PresenceData {
+            name: r.name.into(),
+            status: r.status.into(),
+        })
+        .collect();
+    hud.set_presence(Rc::new(slint::VecModel::from(rows)).into());
 }
 
 fn show_clock(hud: &Hud) {
@@ -273,6 +290,12 @@ fn run() -> Result<(), AppError> {
     show_claude(&hud, &claude_waiting);
     let codex_waiting = view::codex_view(&Metric::unavailable(ai::WAITING), 0);
     show_codex(&hud, false, &codex_waiting);
+    show_extras(
+        &hud,
+        &Metric::unavailable(extras::GEMINI_NOT_FOUND),
+        &Metric::unavailable(extras::CURSOR_NOT_FOUND),
+        &[],
+    );
     show_clock(&hud);
     let items = config.minibar.items.clone();
     bar.set_chips(chip_model(&view::minibar_chips(
@@ -358,6 +381,11 @@ fn run() -> Result<(), AppError> {
     let (claude_updates, claude_poller) = ai::spawn();
     let claude_state = RefCell::new(Metric::unavailable(ai::WAITING));
     let codex_state = RefCell::new(Metric::unavailable(ai::WAITING));
+    let extras_state = RefCell::new((
+        Metric::unavailable(extras::GEMINI_NOT_FOUND),
+        Metric::unavailable(extras::CURSOR_NOT_FOUND),
+        Vec::new(),
+    ));
     let looks = Rc::new((NativeLook::default(), NativeLook::default()));
     let refresh_looks = {
         let (w, looks) = (w.clone(), looks.clone());
@@ -398,6 +426,7 @@ fn run() -> Result<(), AppError> {
                 if let Some(latest) = claude_updates.try_iter().last() {
                     *claude_state.borrow_mut() = latest.claude;
                     *codex_state.borrow_mut() = latest.codex;
+                    *extras_state.borrow_mut() = (latest.gemini, latest.cursor, latest.presence);
                 }
                 let claude = claude_state.borrow();
                 let claude_now =
@@ -407,6 +436,8 @@ fn run() -> Result<(), AppError> {
                 let codex = codex_state.borrow();
                 let codex_now = view::codex_view(&codex, ai::unix_now().unwrap_or(0));
                 show_codex(&hud, view::codex_listed(&codex), &codex_now);
+                let (gemini, cursor, presence) = &*extras_state.borrow();
+                show_extras(&hud, gemini, cursor, presence);
                 bar.set_chips(chip_model(&view::minibar_chips(
                     &items,
                     &s,
@@ -517,11 +548,13 @@ mod tests {
     fn slint_window_size_matches_hud_size() {
         use hud_core::config::{HUD_BASE_HEIGHT, HUD_SIZE};
         assert!(HUD.contains(&format!("width: {}px;", HUD_SIZE.width)));
-        // HUD_SIZE is the tallest layout (Codex listed); without Codex the window is shorter.
-        assert!(HUD.contains(&format!(
-            "height: root.codex-listed ? {}px : {}px;",
-            HUD_SIZE.height, HUD_BASE_HEIGHT
-        )));
+        // HUD_SIZE is the tallest layout (every provider listed); the window follows what is listed.
+        assert!(HUD.contains("height: root.others-y + root.others-h + 22px;"));
+        assert!(HUD.contains(&format!("{}px;", HUD_BASE_HEIGHT - 22)));
+        assert_eq!(
+            HUD_SIZE.height,
+            HUD_BASE_HEIGHT + 66 + 44 + 44 + 18 + 20 * 3
+        );
     }
 
     #[test]
