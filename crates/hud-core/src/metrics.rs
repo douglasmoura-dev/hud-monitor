@@ -1,5 +1,6 @@
 //! Snapshot model and the collector that builds it from abstract sources.
 
+use crate::sensors::{GpuMetrics, Sensors, ThermalMetrics};
 use std::{fmt, time::Duration};
 
 pub const DISK_IO_UNAVAILABLE: &str = "contador indisponível";
@@ -93,6 +94,8 @@ pub struct Snapshot {
     pub disk: DiskMetrics,
     pub net: NetMetrics,
     pub ping_ms: Metric<u32>,
+    pub thermal: ThermalMetrics,
+    pub gpu: GpuMetrics,
     /// Set when collection could not start; numeric fields are then placeholders to ignore.
     pub unavailable: Option<String>,
 }
@@ -100,6 +103,7 @@ pub struct Snapshot {
 impl Snapshot {
     /// Degraded snapshot: every metric is `Unavailable(reason)`.
     pub fn unavailable(reason: &str) -> Self {
+        let sensors = Sensors::unavailable(reason);
         Self {
             cpu: CpuMetrics {
                 total: 0.0,
@@ -123,6 +127,8 @@ impl Snapshot {
                 day_total: Metric::unavailable(reason),
             },
             ping_ms: Metric::unavailable(reason),
+            thermal: sensors.thermal,
+            gpu: sensors.gpu,
             unavailable: Some(reason.to_string()),
         }
     }
@@ -220,13 +226,21 @@ impl<S: SystemSource, D: DiskIoSource, T: DayStore> Collector<S, D, T> {
     }
 
     /// Builds one snapshot; `elapsed_secs` is the time since the previous tick.
-    pub fn tick(&mut self, elapsed_secs: f64, today: Date, ping_ms: Metric<u32>) -> Snapshot {
+    pub fn tick(
+        &mut self,
+        elapsed_secs: f64,
+        today: Date,
+        ping_ms: Metric<u32>,
+        sensors: Sensors,
+    ) -> Snapshot {
         Snapshot {
             cpu: self.cpu(),
             mem: self.mem(),
             disk: self.disk(),
             net: self.net(elapsed_secs, today),
             ping_ms,
+            thermal: sensors.thermal,
+            gpu: sensors.gpu,
             unavailable: None,
         }
     }
@@ -411,7 +425,12 @@ mod tests {
             threads: vec![10.0, 90.0, 50.0, 51.0],
             ..Default::default()
         };
-        let s = collector(sys, MemStore::default()).tick(1.0, D1, no_ping());
+        let s = collector(sys, MemStore::default()).tick(
+            1.0,
+            D1,
+            no_ping(),
+            Sensors::unavailable("teste"),
+        );
         assert_eq!(s.cpu.total, 50.25);
         assert_eq!(s.cpu.threads.len(), 4);
         assert_eq!(s.cpu.above_50, 2);
@@ -426,7 +445,7 @@ mod tests {
         };
         let mut c = collector(sys, MemStore::default());
         *net.borrow_mut() = (4_404_019, 327_680);
-        let s = c.tick(1.0, D1, no_ping());
+        let s = c.tick(1.0, D1, no_ping(), Sensors::unavailable("teste"));
         assert_eq!(rate(s.net.down), "4.2 MB/s");
         assert_eq!(rate(s.net.up), "320 KB/s");
         assert_eq!(s.net.day_total, Metric::Available(4_404_019 + 327_680));
@@ -439,7 +458,12 @@ mod tests {
             mem: (used, 16 * GIB),
             ..Default::default()
         };
-        let s = collector(sys, MemStore::default()).tick(1.0, D1, no_ping());
+        let s = collector(sys, MemStore::default()).tick(
+            1.0,
+            D1,
+            no_ping(),
+            Sensors::unavailable("teste"),
+        );
         assert_eq!(s.mem.percent, 70);
         assert_eq!(used_total_gb(s.mem.used, s.mem.total), "11.2/16 GB");
     }
@@ -456,10 +480,12 @@ mod tests {
         let three_gb = 3_328_599_654;
         *net.borrow_mut() = (three_gb, 0);
         assert_eq!(
-            c.tick(1.0, D1, no_ping()).net.day_total,
+            c.tick(1.0, D1, no_ping(), Sensors::unavailable("teste"))
+                .net
+                .day_total,
             Metric::Available(three_gb)
         );
-        let s = c.tick(1.0, D2, no_ping());
+        let s = c.tick(1.0, D2, no_ping(), Sensors::unavailable("teste"));
         assert_eq!(s.net.day_total, Metric::Available(0));
         assert_eq!(store.load(D1), Some(three_gb));
         assert_eq!(store.load(D2), None);
@@ -469,13 +495,23 @@ mod tests {
     fn day_total_resumes_from_store_on_start() {
         let store = MemStore::default();
         store.save(D1, 500).unwrap();
-        let s = collector(FakeSystem::default(), store).tick(1.0, D1, no_ping());
+        let s = collector(FakeSystem::default(), store).tick(
+            1.0,
+            D1,
+            no_ping(),
+            Sensors::unavailable("teste"),
+        );
         assert_eq!(s.net.day_total, Metric::Available(500));
     }
 
     #[test]
     fn unavailable_disk_io_is_explicit() {
-        let s = collector(FakeSystem::default(), MemStore::default()).tick(1.0, D1, no_ping());
+        let s = collector(FakeSystem::default(), MemStore::default()).tick(
+            1.0,
+            D1,
+            no_ping(),
+            Sensors::unavailable("teste"),
+        );
         assert_eq!(
             s.disk.io,
             Metric::Unavailable("contador indisponível".into())
@@ -510,7 +546,7 @@ mod tests {
         c.flush();
         assert!(c.take_save_error().is_some());
         assert!(c.take_save_error().is_none());
-        let s = c.tick(1.0, D1, no_ping());
+        let s = c.tick(1.0, D1, no_ping(), Sensors::unavailable("teste"));
         assert_eq!(s.net.day_total, Metric::unavailable(SAVE_FAILED));
     }
 
@@ -519,7 +555,7 @@ mod tests {
         let mut c = collector(FakeSystem::default(), MemStore::default());
         c.save_failed = true;
         c.flush();
-        let s = c.tick(1.0, D1, no_ping());
+        let s = c.tick(1.0, D1, no_ping(), Sensors::unavailable("teste"));
         assert_eq!(s.net.day_total, Metric::Available(0));
     }
 

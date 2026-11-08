@@ -91,3 +91,7 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - Input: dois perfis com o mesmo nome → Expect: `Err(ConfigError::Invalid { field: "profiles" })`.
 - Input: `switch_profile("Nope")` → Expect: `Err(ConfigError::Invalid { field: "profile" })`.
 - Input: build release iniciado sem `config.toml` → Expect: HUD abre (config de primeira execução em memória) e processo fica vivo.
+
+## Verificações adicionais — T04 (E04)
+- Input: driver NVIDIA 471.11 (GeForce 920MX) sem `nvmlDeviceGetMemoryInfo_v2` → Expect: VRAM `Unavailable("VRAM indisponível neste driver")`, temperatura e uso da GPU NVIDIA continuam disponíveis.
+- Input: zonas térmicas e GPU Intel (HD 620) reais, build release → Expect: janela mostra `TEMP` em °C e uso da Intel em 

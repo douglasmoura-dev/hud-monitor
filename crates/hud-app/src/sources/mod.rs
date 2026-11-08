@@ -6,4 +6,4 @@ mod win;
 
 pub use day_store::FileDayStore;
 pub use sys::SysinfoSource;
-pub use win::{IcmpPing, PdhDiskIo};
+pub use win::{IcmpPing, NvmlSource, PdhDiskIo, PdhIntelGpu, PdhThermal};

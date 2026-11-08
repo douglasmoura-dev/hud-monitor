@@ -1,8 +1,11 @@
 //! Collector threads: a 1 Hz snapshot builder and a 5 s ping loop.
 
-use crate::sources::{FileDayStore, IcmpPing, PdhDiskIo, SysinfoSource};
+use crate::sources::{
+    FileDayStore, IcmpPing, NvmlSource, PdhDiskIo, PdhIntelGpu, PdhThermal, SysinfoSource,
+};
 use crate::{store, winffi};
 use hud_core::metrics::{ping_metric, Collector, DayClock, Metric, PingSource, Snapshot};
+use hud_core::sensors::read_sensors;
 use std::{
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
@@ -75,6 +78,8 @@ fn snapshot_loop(tx: &Sender<Snapshot>, ping: &SharedPing, stop: &Receiver<()>) 
         FileDayStore::new(dir),
         clock.today(start.elapsed(), winffi::local_now),
     );
+    let (mut thermal, mut nvidia, mut intel) =
+        (PdhThermal::new(), NvmlSource::new(), PdhIntelGpu::new());
     let mut last = Instant::now();
     while stop.recv_timeout(TICK) == Err(RecvTimeoutError::Timeout) {
         let elapsed = last.elapsed().as_secs_f64();
@@ -83,7 +88,8 @@ fn snapshot_loop(tx: &Sender<Snapshot>, ping: &SharedPing, stop: &Receiver<()>) 
             .lock()
             .map_or(Metric::unavailable(PING_PENDING), |g| g.clone());
         let today = clock.today(start.elapsed(), winffi::local_now);
-        let snapshot = collector.tick(elapsed, today, ping_now);
+        let sensors = read_sensors(&mut thermal, &mut nvidia, &mut intel);
+        let snapshot = collector.tick(elapsed, today, ping_now, sensors);
         log_save_error(&mut collector);
         if tx.send(snapshot).is_err() {
             break;
