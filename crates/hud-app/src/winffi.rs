@@ -2,19 +2,23 @@
 
 use hud_core::metrics::{Date, DiskIo};
 use hud_core::position::Size;
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::NetworkManagement::IpHelper::{
     IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho, ICMP_ECHO_REPLY,
 };
 use windows::Win32::System::Performance::{
-    PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterValue,
-    PdhOpenQueryW, PDH_FMT_COUNTERVALUE, PDH_FMT_LARGE, PDH_HCOUNTER, PDH_HQUERY,
+    PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW,
+    PdhGetFormattedCounterValue, PdhOpenQueryW, PDH_FMT_COUNTERVALUE, PDH_FMT_COUNTERVALUE_ITEM_W,
+    PDH_FMT_DOUBLE, PDH_FMT_LARGE, PDH_HCOUNTER, PDH_HQUERY,
 };
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
 const PDH_OK: u32 = 0;
+const PDH_MORE_DATA: u32 = 0x800007D2;
+const INTEL_VENDOR_ID: u32 = 0x8086;
 const ICMP_REPLY_WORDS: usize = 32;
 
 /// Primary monitor size in physical pixels.
@@ -97,6 +101,111 @@ impl DiskCounters {
     }
 }
 
+/// PDH query over a wildcard counter path such as `\GPU Engine(*)\Utilization Percentage`.
+pub struct CounterArray {
+    query: PDH_HQUERY,
+    counter: PDH_HCOUNTER,
+}
+
+impl CounterArray {
+    /// `None` when PDH or the counter path is unavailable.
+    pub fn open(path: &str) -> Option<Self> {
+        let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+        let mut query = PDH_HQUERY::default();
+        let mut counter = PDH_HCOUNTER::default();
+        // SAFETY: `wide` is NUL-terminated and outlives the calls; the out pointers refer to
+        // live locals; the query is closed in Drop or on failure here.
+        unsafe {
+            if PdhOpenQueryW(None, 0, &mut query) != PDH_OK {
+                return None;
+            }
+            let ok = PdhAddEnglishCounterW(query, PCWSTR(wide.as_ptr()), 0, &mut counter) == PDH_OK
+                && PdhCollectQueryData(query) == PDH_OK;
+            if !ok {
+                PdhCloseQuery(query);
+                return None;
+            }
+        }
+        Some(Self { query, counter })
+    }
+
+    /// `(instance name, value)` for every instance; `None` on any PDH error.
+    pub fn sample(&mut self) -> Option<Vec<(String, f64)>> {
+        // SAFETY: the query and counter are valid (see `open`). The item buffer is
+        // 8-byte aligned and sized by the first call as PDH documents; names point into it
+        // and are read before the buffer is dropped.
+        unsafe {
+            if PdhCollectQueryData(self.query) != PDH_OK {
+                return None;
+            }
+            let (mut bytes, mut count) = (0u32, 0u32);
+            let status = PdhGetFormattedCounterArrayW(
+                self.counter,
+                PDH_FMT_DOUBLE,
+                &mut bytes,
+                &mut count,
+                None,
+            );
+            if status != PDH_MORE_DATA {
+                return None;
+            }
+            let mut buf = vec![0u64; (bytes as usize).div_ceil(8)];
+            let items = buf.as_mut_ptr().cast::<PDH_FMT_COUNTERVALUE_ITEM_W>();
+            let status = PdhGetFormattedCounterArrayW(
+                self.counter,
+                PDH_FMT_DOUBLE,
+                &mut bytes,
+                &mut count,
+                Some(items),
+            );
+            if status != PDH_OK {
+                return None;
+            }
+            let list = std::slice::from_raw_parts(items, count as usize);
+            Some(
+                list.iter()
+                    .filter(|i| i.FmtValue.CStatus == PDH_OK)
+                    .filter_map(|i| {
+                        let name = i.szName.to_string().ok()?;
+                        Some((name, i.FmtValue.Anonymous.doubleValue))
+                    })
+                    .collect(),
+            )
+        }
+    }
+}
+
+impl Drop for CounterArray {
+    fn drop(&mut self) {
+        // SAFETY: the query handle is valid and closed exactly once here.
+        unsafe {
+            PdhCloseQuery(self.query);
+        }
+    }
+}
+
+/// `luid_0xHHHHHHHH_0xLLLLLLLL` tag (as in `\GPU Engine` instance names) of the first Intel adapter.
+pub fn intel_adapter_luid() -> Option<String> {
+    // SAFETY: plain COM calls on interfaces owned by this scope; the descriptor is a local
+    // out parameter.
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        let mut index = 0;
+        while let Ok(adapter) = factory.EnumAdapters1(index) {
+            let desc = adapter.GetDesc1().ok()?;
+            if desc.VendorId == INTEL_VENDOR_ID {
+                let luid = desc.AdapterLuid;
+                return Some(format!(
+                    "luid_0x{:08X}_0x{:08X}",
+                    luid.HighPart as u32, luid.LowPart
+                ));
+            }
+            index += 1;
+        }
+        None
+    }
+}
+
 /// SAFETY: caller passes a counter handle belonging to an open query.
 unsafe fn counter_value(counter: PDH_HCOUNTER) -> Option<u64> {
     let mut value = PDH_FMT_COUNTERVALUE::default();
@@ -168,6 +277,11 @@ mod tests {
     fn screen_has_positive_size() {
         let s = super::screen_size();
         assert!(s.width > 0 && s.height > 0);
+    }
+
+    #[test]
+    fn missing_counter_path_is_none() {
+        assert!(super::CounterArray::open(r"\Nada(*)\Nada").is_none());
     }
 
     #[test]

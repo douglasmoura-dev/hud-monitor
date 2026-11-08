@@ -7,7 +7,7 @@ mod winffi;
 
 use hud_core::config::{Config, HUD_SIZE};
 use hud_core::format::used_total_gb;
-use hud_core::metrics::Snapshot;
+use hud_core::metrics::{Metric, Snapshot};
 use hud_core::position::{clamp_to_screen, Point, Size};
 use slint::{ComponentHandle, PhysicalPosition};
 use std::{cell::RefCell, rc::Rc};
@@ -24,6 +24,8 @@ slint::slint! {
         callback quit();
         in property <string> cpu-text: "CPU —";
         in property <string> ram-text: "RAM —";
+        in property <string> temp-text: "TEMP —";
+        in property <string> gpu-text: "GPU —";
 
         Rectangle {
             background: #070d14e6;
@@ -67,6 +69,22 @@ slint::slint! {
                 color: #e6f7f5;
                 font-size: 16px;
             }
+            Text {
+                x: 10px;
+                y: 96px;
+                text: root.temp-text;
+                color: #e6f7f5;
+                font-size: 16px;
+            }
+            Text {
+                x: 10px;
+                y: 122px;
+                width: parent.width - 20px;
+                wrap: word-wrap;
+                text: root.gpu-text;
+                color: #e6f7f5;
+                font-size: 13px;
+            }
         }
     }
 }
@@ -90,6 +108,8 @@ fn show_snapshot(hud: &Hud, s: &Snapshot) {
     if let Some(reason) = &s.unavailable {
         hud.set_cpu_text(format!("CPU — ({reason})").into());
         hud.set_ram_text(format!("RAM — ({reason})").into());
+        hud.set_temp_text(format!("TEMP — ({reason})").into());
+        hud.set_gpu_text(format!("GPU — ({reason})").into());
         return;
     }
     hud.set_cpu_text(format!("CPU {:.0}%", s.cpu.total).into());
@@ -101,6 +121,25 @@ fn show_snapshot(hud: &Hud, s: &Snapshot) {
         )
         .into(),
     );
+    hud.set_temp_text(format!("TEMP {}", shown(&s.thermal.cpu_c, |c| format!("{c}°C"))).into());
+    hud.set_gpu_text(gpu_text(s).into());
+}
+
+fn shown<T>(m: &Metric<T>, fmt: impl Fn(&T) -> String) -> String {
+    match m {
+        Metric::Available(v) => fmt(v),
+        Metric::Unavailable(reason) => format!("— ({reason})"),
+    }
+}
+
+fn gpu_text(s: &Snapshot) -> String {
+    let nv = &s.gpu.nvidia;
+    format!(
+        "NVIDIA {} {}\nIntel {}",
+        shown(&nv.usage_percent, |u| format!("{u}%")),
+        shown(&nv.temp_c, |t| format!("{t}°C")),
+        shown(&s.gpu.intel_usage_percent, |u| format!("{u:.0}%")),
+    )
 }
 
 fn run() -> Result<(), AppError> {
