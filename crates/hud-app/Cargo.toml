@@ -14,6 +14,7 @@ nvml-wrapper = { version = "0.11", default-features = false }
 tray-icon = "0.26"
 global-hotkey = "0.9"
 raw-window-handle = "0.6"
+ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [build-dependencies]
 slint-build = "1.18"

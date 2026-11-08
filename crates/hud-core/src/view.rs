@@ -1,7 +1,8 @@
 //! Display text for the HUD, built from a `Snapshot`. Unavailable metrics become `—` plus the reason.
 
-use crate::alerts::{evaluate, Level};
-use crate::config::{MiniBarItem, Orientation, Thresholds};
+use crate::ai::{format_reset_in, ProviderStatus, Reading};
+use crate::alerts::{evaluate, level_of, Level};
+use crate::config::{MiniBarItem, Orientation, Threshold, Thresholds};
 use crate::format::{rate, size, used_total_gb};
 use crate::metrics::{CpuMetrics, Metric, Snapshot};
 use crate::position::Size;
@@ -206,7 +207,78 @@ pub fn build(s: &Snapshot) -> HudView {
     }
 }
 
-const NOT_IMPLEMENTED: &str = "provedor ainda não implementado";
+/// Claude limits as last fetched; `Unavailable` carries the reason shown as `—`.
+pub type ClaudeState = Metric<ProviderStatus>;
+
+/// One limit window row: text, meter fill and time to reset.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Limit {
+    pub pct: Field,
+    pub reset: String,
+    pub percent: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ClaudeView {
+    /// `PRO`, `MAX` or empty.
+    pub plan: String,
+    pub five: Limit,
+    pub week: Limit,
+}
+
+fn tokens_text(tokens: u64) -> String {
+    match tokens {
+        0 => "~0%".to_owned(),
+        1..=999 => format!("~{tokens} tok"),
+        1000..=999_999 => format!("~{:.1}k tok", tokens as f64 / 1e3),
+        _ => format!("~{:.1}M tok", tokens as f64 / 1e6),
+    }
+}
+
+fn limit(r: &Reading, tip: &str, now: i64, t: Option<Threshold>) -> Limit {
+    match r {
+        Reading::Official { percent, resets_at } => Limit {
+            pct: Field {
+                level: t.map_or(Level::Ok, |t| level_of(*percent, t)),
+                ..Field::ok(format!("{percent:.0}%"))
+            },
+            reset: format_reset_in(*resets_at, now),
+            percent: *percent,
+        },
+        Reading::Estimate { tokens } => Limit {
+            pct: Field {
+                text: tokens_text(*tokens),
+                tip: tip.to_owned(),
+                level: Level::Ok,
+            },
+            reset: String::new(),
+            percent: 0.0,
+        },
+    }
+}
+
+/// Claude row for the HUD and chips. Only the 5 h window alerts.
+pub fn claude_view(state: &ClaudeState, now: i64, t: &Thresholds) -> ClaudeView {
+    match state {
+        Metric::Available(s) => ClaudeView {
+            plan: s.plan.clone().unwrap_or_default(),
+            five: limit(&s.five_hour, &s.tip, now, Some(t.claude_5h)),
+            week: limit(&s.seven_day, &s.tip, now, None),
+        },
+        Metric::Unavailable(reason) => {
+            let missing = || Limit {
+                pct: Field::missing(reason),
+                ..Limit::default()
+            };
+            ClaudeView {
+                plan: String::new(),
+                five: missing(),
+                week: missing(),
+            }
+        }
+    }
+}
+
 pub const CHIP_SIZE: Size = Size {
     width: 64,
     height: 36,
@@ -237,7 +309,7 @@ fn chip_label(item: MiniBarItem) -> &'static str {
     }
 }
 
-fn chip_value(item: MiniBarItem, v: &HudView) -> Field {
+fn chip_value(item: MiniBarItem, v: &HudView, c: &ClaudeView) -> Field {
     match item {
         MiniBarItem::Cpu => v.cpu_total.clone(),
         MiniBarItem::Ram => percent_field(&v.ram, v.ram_percent, v.ram.level),
@@ -246,7 +318,16 @@ fn chip_value(item: MiniBarItem, v: &HudView) -> Field {
         MiniBarItem::Ping => v.ping.clone(),
         MiniBarItem::Gpu => v.gpu_nvidia.clone(),
         MiniBarItem::Disk => percent_field(&v.disk, v.disk_percent, Level::Ok),
-        MiniBarItem::Claude5h | MiniBarItem::Claude7d => Field::missing(NOT_IMPLEMENTED),
+        MiniBarItem::Claude5h => chip_limit(&c.five),
+        MiniBarItem::Claude7d => chip_limit(&c.week),
+    }
+}
+
+/// Chips are narrow: the unit of a token estimate is dropped.
+fn chip_limit(l: &Limit) -> Field {
+    Field {
+        text: l.pct.text.trim_end_matches(" tok").to_owned(),
+        ..l.pct.clone()
     }
 }
 
@@ -262,13 +343,18 @@ fn percent_field(source: &Field, percent: f32, level: Level) -> Field {
 }
 
 /// Chips in the configured order, built from the same view as the HUD.
-pub fn minibar_chips(items: &[MiniBarItem], s: &Snapshot, t: &Thresholds) -> Vec<Chip> {
+pub fn minibar_chips(
+    items: &[MiniBarItem],
+    s: &Snapshot,
+    t: &Thresholds,
+    claude: &ClaudeView,
+) -> Vec<Chip> {
     let v = build_alerted(s, t);
     items
         .iter()
         .map(|&item| Chip {
             label: chip_label(item),
-            value: chip_value(item, &v),
+            value: chip_value(item, &v, claude),
         })
         .collect()
 }
@@ -303,10 +389,37 @@ pub fn minibar_size(count: usize, orientation: Orientation) -> Size {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::{ProviderStatus, Reading};
     use crate::config::Config;
     use crate::format::GIB;
     use crate::metrics::{DiskMetrics, MemMetrics, NetMetrics, ProcessMem};
     use crate::sensors::Sensors;
+
+    const NOW: i64 = 1_794_066_960;
+
+    fn official() -> ClaudeState {
+        Metric::Available(ProviderStatus {
+            plan: Some("PRO".into()),
+            five_hour: Reading::Official {
+                percent: 72.0,
+                resets_at: NOW + 6480,
+            },
+            seven_day: Reading::Official {
+                percent: 41.0,
+                resets_at: NOW + 2 * 86400 + 72_240,
+            },
+            tip: String::new(),
+        })
+    }
+
+    fn estimate(five: u64, seven: u64) -> ClaudeState {
+        Metric::Available(ProviderStatus {
+            plan: None,
+            five_hour: Reading::Estimate { tokens: five },
+            seven_day: Reading::Estimate { tokens: seven },
+            tip: "abra o Claude Code para renovar o login".into(),
+        })
+    }
 
     fn snapshot(threads: Vec<f32>) -> Snapshot {
         let sensors = Sensors::unavailable("sem sensor");
@@ -361,7 +474,12 @@ mod tests {
         assert_eq!(v.cpu_total.level, Level::Crit);
         assert_eq!(v.ram.level, Level::Warn);
         assert_eq!(v.cpu_temp.level, Level::Ok);
-        let chips = minibar_chips(&[MiniBarItem::Cpu, MiniBarItem::Ram], &s, &thresholds());
+        let chips = minibar_chips(
+            &[MiniBarItem::Cpu, MiniBarItem::Ram],
+            &s,
+            &thresholds(),
+            &ClaudeView::default(),
+        );
         assert_eq!(chips[0].value.level, Level::Crit);
         assert_eq!(chips[1].value.level, Level::Warn);
         assert_eq!(level_color(Level::Warn), Some(0xEF9F27));
@@ -440,12 +558,13 @@ mod tests {
     }
 
     #[test]
-    fn chips_follow_configured_order_and_unimplemented_provider_is_dash() {
+    fn chips_follow_configured_order_and_unavailable_provider_is_dash() {
         use MiniBarItem::*;
         let chips = minibar_chips(
             &[Cpu, Ram, Net, Claude5h],
             &snapshot(vec![10.0]),
             &thresholds(),
+            &claude_view(&Metric::unavailable("sem login"), NOW, &thresholds()),
         );
         let labels: Vec<_> = chips.iter().map(|c| c.label).collect();
         assert_eq!(labels, ["CPU", "RAM", "NET", "5H"]);
@@ -453,7 +572,7 @@ mod tests {
         assert_eq!(chips[1].value.text, "50%");
         assert_eq!(chips[2].value.text, "4.2 MB/s");
         assert_eq!(chips[3].value.text, "—");
-        assert_eq!(chips[3].value.tip, "provedor ainda não implementado");
+        assert_eq!(chips[3].value.tip, "sem login");
     }
 
     #[test]
@@ -463,6 +582,7 @@ mod tests {
             &[Temp, Ram],
             &Snapshot::unavailable("coleta falhou"),
             &thresholds(),
+            &ClaudeView::default(),
         );
         assert!(chips.iter().all(|c| c.value.text == "—"));
         assert_eq!(chips[1].value.tip, "coleta falhou");
@@ -474,5 +594,76 @@ mod tests {
         let v = minibar_size(4, Orientation::Vertical);
         assert_eq!((h.width, h.height), (40 + 4 * 68 + 12, 48));
         assert_eq!((v.width, v.height), (76, 40 + 4 * 40 + 12));
+    }
+
+    #[test]
+    fn official_claude_shows_badge_percent_reset_and_warns_at_72() {
+        let v = claude_view(&official(), NOW, &thresholds());
+        assert_eq!(v.plan, "PRO");
+        assert_eq!(
+            (v.five.pct.text.as_str(), v.five.reset.as_str()),
+            ("72%", "1h48")
+        );
+        assert_eq!(v.five.pct.level, Level::Warn);
+        assert_eq!(
+            (v.week.pct.text.as_str(), v.week.reset.as_str()),
+            ("41%", "2d")
+        );
+        assert_eq!(v.week.pct.level, Level::Ok);
+        assert_eq!(v.five.percent, 72.0);
+    }
+
+    #[test]
+    fn estimated_claude_is_tilde_prefixed_with_renew_tooltip_and_no_percent() {
+        let v = claude_view(&estimate(1_200_000, 480_000), NOW, &thresholds());
+        assert_eq!(v.five.pct.text, "~1.2M tok");
+        assert_eq!(v.week.pct.text, "~480.0k tok");
+        assert_eq!(v.five.pct.tip, "abra o Claude Code para renovar o login");
+        assert_eq!((v.five.percent, v.five.reset.as_str()), (0.0, ""));
+        assert_eq!(v.five.pct.level, Level::Ok);
+    }
+
+    #[test]
+    fn estimate_without_tokens_is_tilde_zero_percent() {
+        let v = claude_view(&estimate(0, 900), NOW, &thresholds());
+        assert_eq!(v.five.pct.text, "~0%");
+        assert_eq!(v.week.pct.text, "~900 tok");
+    }
+
+    #[test]
+    fn claude_chips_show_real_values_and_drop_the_tok_unit() {
+        use MiniBarItem::*;
+        let t = thresholds();
+        let s = snapshot(vec![1.0]);
+        let ok = minibar_chips(
+            &[Claude5h, Claude7d],
+            &s,
+            &t,
+            &claude_view(&official(), NOW, &t),
+        );
+        assert_eq!(
+            (ok[0].value.text.as_str(), ok[1].value.text.as_str()),
+            ("72%", "41%")
+        );
+        assert_eq!(ok[0].value.level, Level::Warn);
+        let est = minibar_chips(
+            &[Claude5h],
+            &s,
+            &t,
+            &claude_view(&estimate(1_200_000, 0), NOW, &t),
+        );
+        assert_eq!(est[0].value.text, "~1.2M");
+    }
+
+    #[test]
+    fn unavailable_claude_is_dash_with_reason_and_no_badge() {
+        let v = claude_view(
+            &Metric::unavailable("Claude Code não encontrado"),
+            NOW,
+            &thresholds(),
+        );
+        assert_eq!(v.plan, "");
+        assert_eq!(v.five.pct.text, "—");
+        assert_eq!(v.week.pct.tip, "Claude Code não encontrado");
     }
 }

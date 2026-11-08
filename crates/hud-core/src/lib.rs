@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod alerts;
 pub mod appearance;
 pub mod config;

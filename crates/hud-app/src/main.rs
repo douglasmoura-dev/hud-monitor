@@ -1,15 +1,16 @@
 #![windows_subsystem = "windows"]
 
+mod ai;
 mod collect;
 mod shell;
 mod sources;
 mod store;
 mod winffi;
 
-use hud_core::alerts::evaluate;
+use hud_core::alerts::{claude_level, evaluate, Level};
 use hud_core::config::{Config, Orientation, Thresholds, HUD_SIZE};
 use hud_core::integration::{apply_autostart, register_hotkeys, shell_notice, IntegrationError};
-use hud_core::metrics::Snapshot;
+use hud_core::metrics::{Metric, Snapshot};
 use hud_core::position::{clamp_to_screen, Point, Size};
 use hud_core::view;
 use shell::{effective_opacity, NativeLook, Tray, TrayAction};
@@ -66,6 +67,20 @@ fn show_snapshot(hud: &Hud, s: &Snapshot, t: &Thresholds) {
     hud.set_net_up(field(&v.net_up));
     hud.set_net_today(field(&v.net_today));
     hud.set_ping(field(&v.ping));
+}
+
+fn limit(l: &view::Limit) -> Limit {
+    Limit {
+        pct: field(&l.pct),
+        reset: l.reset.as_str().into(),
+        percent: l.percent,
+    }
+}
+
+fn show_claude(hud: &Hud, v: &view::ClaudeView) {
+    hud.set_claude_plan(v.plan.as_str().into());
+    hud.set_claude_5h(limit(&v.five));
+    hud.set_claude_7d(limit(&v.week));
 }
 
 fn show_clock(hud: &Hud) {
@@ -247,12 +262,16 @@ fn run() -> Result<(), AppError> {
     let config = store::load_or_first_run(&path, screen)?;
     let waiting = Snapshot::unavailable(WAITING);
     show_snapshot(&hud, &waiting, &config.thresholds);
+    let claude_waiting =
+        view::claude_view(&Metric::unavailable(ai::WAITING), 0, &config.thresholds);
+    show_claude(&hud, &claude_waiting);
     show_clock(&hud);
     let items = config.minibar.items.clone();
     bar.set_chips(chip_model(&view::minibar_chips(
         &items,
         &waiting,
         &config.thresholds,
+        &claude_waiting,
     )));
     hud.set_bg_alpha(effective_opacity(config.hud.opacity));
     hud.set_pinned(config.hud.click_through);
@@ -327,6 +346,8 @@ fn run() -> Result<(), AppError> {
     bar.on_expand(move || to_hud.switch_to(false));
 
     let (snapshots, collection) = collect::spawn();
+    let (claude_updates, claude_poller) = ai::spawn();
+    let claude_state = RefCell::new(Metric::unavailable(ai::WAITING));
     let looks = Rc::new((NativeLook::default(), NativeLook::default()));
     let refresh_looks = {
         let (w, looks) = (w.clone(), looks.clone());
@@ -364,9 +385,22 @@ fn run() -> Result<(), AppError> {
                     let c = ticker.config.borrow();
                     (c.minibar.items.clone(), c.thresholds.clone())
                 };
+                if let Some(latest) = claude_updates.try_iter().last() {
+                    *claude_state.borrow_mut() = latest;
+                }
+                let claude = claude_state.borrow();
+                let claude_now =
+                    view::claude_view(&claude, ai::unix_now().unwrap_or(0), &thresholds);
                 show_snapshot(&hud, &s, &thresholds);
-                bar.set_chips(chip_model(&view::minibar_chips(&items, &s, &thresholds)));
-                let crit = evaluate(&s, &thresholds).any_crit();
+                show_claude(&hud, &claude_now);
+                bar.set_chips(chip_model(&view::minibar_chips(
+                    &items,
+                    &s,
+                    &thresholds,
+                    &claude_now,
+                )));
+                let crit = evaluate(&s, &thresholds).any_crit()
+                    || claude_level(&claude, &thresholds) == Level::Crit;
                 if crit && !was_crit {
                     ticker.escalate();
                 }
@@ -410,6 +444,7 @@ fn run() -> Result<(), AppError> {
     w.apply_visibility();
     slint::run_event_loop_until_quit()?;
     collection.shutdown();
+    claude_poller.shutdown();
     Ok(())
 }
 

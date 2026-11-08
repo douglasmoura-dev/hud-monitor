@@ -1,0 +1,5 @@
+{"type":"user","timestamp":"2026-11-07T15:00:00.000Z","message":{"role":"user","content":"oi"}}
+{"type":"assistant","timestamp":"2026-11-07T15:30:00.000Z","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":1000,"cache_read_input_tokens":99999}}}
+{"type":"assistant","timestamp":"2026-11-07T08:00:00.000Z","message":{"role":"assistant","usage":{"input_tokens":10,"output_tokens":20}}}
+{"type":"assistant","timestamp":"2026-10-20T08:00:00.000Z","message":{"role":"assistant","usage":{"input_tokens":7,"output_tokens":7}}}
+not json at all

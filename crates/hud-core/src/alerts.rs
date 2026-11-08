@@ -1,7 +1,9 @@
 //! Threshold alerts: maps a `Snapshot` to a `Level` per metric. Unavailable metrics never alert.
 
+use crate::ai::Reading;
 use crate::config::{Threshold, Thresholds};
 use crate::metrics::{Metric, Snapshot};
+use crate::view::ClaudeState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Level {
@@ -47,6 +49,14 @@ pub fn evaluate(s: &Snapshot, t: &Thresholds) -> Alerts {
     }
 }
 
+/// Level of the Claude 5 h window. Estimates and unavailable data never alert.
+pub fn claude_level(state: &ClaudeState, t: &Thresholds) -> Level {
+    match state.available().map(|s| &s.five_hour) {
+        Some(Reading::Official { percent, .. }) => level_of(*percent, t.claude_5h),
+        _ => Level::Ok,
+    }
+}
+
 impl Alerts {
     pub fn any_crit(&self) -> bool {
         [self.cpu, self.ram, self.temp, self.ping].contains(&Level::Crit)
@@ -86,6 +96,32 @@ mod tests {
         assert_eq!(level_of(91.0, CLAUDE_5H), Level::Crit);
         assert_eq!(level_of(69.9, CLAUDE_5H), Level::Ok);
         assert_eq!(level_of(90.0, CLAUDE_5H), Level::Crit);
+    }
+
+    #[test]
+    fn claude_5h_alerts_only_on_official_readings() {
+        use crate::ai::ProviderStatus;
+        let status = |five| {
+            Metric::Available(ProviderStatus {
+                plan: None,
+                five_hour: five,
+                seven_day: Reading::Estimate { tokens: 0 },
+                tip: String::new(),
+            })
+        };
+        let at = |percent| Reading::Official {
+            percent,
+            resets_at: 0,
+        };
+        let t = thresholds();
+        assert_eq!(claude_level(&status(at(72.0)), &t), Level::Warn);
+        assert_eq!(claude_level(&status(at(91.0)), &t), Level::Crit);
+        assert_eq!(claude_level(&status(at(10.0)), &t), Level::Ok);
+        assert_eq!(
+            claude_level(&status(Reading::Estimate { tokens: 9_999_999 }), &t),
+            Level::Ok
+        );
+        assert_eq!(claude_level(&Metric::unavailable("x"), &t), Level::Ok);
     }
 
     #[test]
