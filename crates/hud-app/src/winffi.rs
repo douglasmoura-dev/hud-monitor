@@ -4,11 +4,12 @@ use hud_core::integration::{Backdrop, IntegrationError, RunKey};
 use hud_core::metrics::{Date, DiskIo};
 use hud_core::position::Size;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::NetworkManagement::IpHelper::{
     IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho, ICMP_ECHO_REPLY,
 };
+use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW,
@@ -20,7 +21,9 @@ use windows::Win32::System::Registry::{
     KEY_SET_VALUE, REG_SZ,
 };
 use windows::Win32::System::SystemInformation::GetLocalTime;
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
+use windows::Win32::UI::Shell::{SHQueryRecycleBinW, SHQUERYRBINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, SM_CXSCREEN, SM_CYSCREEN,
 };
@@ -40,6 +43,46 @@ pub fn screen_size() -> Size {
             height: GetSystemMetrics(SM_CYSCREEN),
         }
     }
+}
+
+/// Whether this process runs elevated (administrator).
+pub fn is_elevated() -> bool {
+    let mut token = HANDLE::default();
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned = 0u32;
+    // SAFETY: `token` and `elevation` are live locals sized as passed; the token handle is
+    // closed before returning, and GetCurrentProcess returns a pseudo-handle that needs none.
+    unsafe {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(std::ptr::from_mut(&mut elevation).cast()),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        ok && elevation.TokenIsElevated != 0
+    }
+}
+
+/// Size in bytes and item count of the Recycle Bin on all drives (read-only query).
+pub fn recycle_bin_info() -> Result<(u64, u64), String> {
+    let mut info = SHQUERYRBINFO {
+        cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` is a live local with `cbSize` set as the API requires; a null root path
+    // means every drive. The call only reads the Recycle Bin state.
+    let result = unsafe { SHQueryRecycleBinW(PCWSTR::null(), &mut info) };
+    result.map_err(|e| format!("Lixeira indisponível: {e}"))?;
+    Ok((
+        u64::try_from(info.i64Size).map_err(|e| e.to_string())?,
+        u64::try_from(info.i64NumItems).map_err(|e| e.to_string())?,
+    ))
 }
 
 /// Current local date and seconds elapsed since local midnight.

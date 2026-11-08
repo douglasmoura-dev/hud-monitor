@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod alerts;
 pub mod appearance;
+pub mod cleanup;
 pub mod config;
 pub mod extras;
 pub mod format;
