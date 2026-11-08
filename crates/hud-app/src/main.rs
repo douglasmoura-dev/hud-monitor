@@ -6,88 +6,15 @@ mod store;
 mod winffi;
 
 use hud_core::config::{Config, HUD_SIZE};
-use hud_core::format::used_total_gb;
-use hud_core::metrics::{Metric, Snapshot};
+use hud_core::metrics::Snapshot;
 use hud_core::position::{clamp_to_screen, Point, Size};
+use hud_core::view;
 use slint::{ComponentHandle, PhysicalPosition};
 use std::{cell::RefCell, rc::Rc};
 
-slint::slint! {
-    export component Hud inherits Window {
-        no-frame: true;
-        always-on-top: true;
-        background: transparent;
-        width: 320px;
-        height: 200px;
-        callback moved(length, length);
-        callback released();
-        callback quit();
-        in property <string> cpu-text: "CPU —";
-        in property <string> ram-text: "RAM —";
-        in property <string> temp-text: "TEMP —";
-        in property <string> gpu-text: "GPU —";
+slint::include_modules!();
 
-        Rectangle {
-            background: #070d14e6;
-            border-color: #1fe0c8;
-            border-width: 1px;
-
-            Rectangle {
-                y: 0px;
-                height: 28px;
-                background: #0e1c2a;
-                TouchArea {
-                    moved => { root.moved(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
-                    pointer-event(e) => { if e.kind == PointerEventKind.up { root.released(); } }
-                }
-                Text {
-                    x: 10px;
-                    text: "SYS // MONITOR";
-                    color: #1fe0c8;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                }
-                TouchArea {
-                    x: parent.width - 28px;
-                    width: 28px;
-                    clicked => { root.quit(); }
-                    Text { text: "x"; color: #1fe0c8; horizontal-alignment: center; vertical-alignment: center; }
-                }
-            }
-
-            Text {
-                x: 10px;
-                y: 44px;
-                text: root.cpu-text;
-                color: #e6f7f5;
-                font-size: 16px;
-            }
-            Text {
-                x: 10px;
-                y: 70px;
-                text: root.ram-text;
-                color: #e6f7f5;
-                font-size: 16px;
-            }
-            Text {
-                x: 10px;
-                y: 96px;
-                text: root.temp-text;
-                color: #e6f7f5;
-                font-size: 16px;
-            }
-            Text {
-                x: 10px;
-                y: 122px;
-                width: parent.width - 20px;
-                wrap: word-wrap;
-                text: root.gpu-text;
-                color: #e6f7f5;
-                font-size: 13px;
-            }
-        }
-    }
-}
+const WAITING: &str = "aguardando a primeira leitura";
 
 #[derive(Debug, thiserror::Error)]
 enum AppError {
@@ -104,47 +31,54 @@ fn save_position(hud: &Hud, path: &std::path::Path, config: &mut Config) {
     }
 }
 
+fn field(f: &view::Field) -> Field {
+    Field {
+        text: f.text.as_str().into(),
+        tip: f.tip.as_str().into(),
+    }
+}
+
+fn bar(b: &view::CoreBar) -> Bar {
+    let [_, r, g, bl] = b.color.to_be_bytes();
+    Bar {
+        percent: b.percent,
+        color: slint::Color::from_rgb_u8(r, g, bl),
+    }
+}
+
 fn show_snapshot(hud: &Hud, s: &Snapshot) {
-    if let Some(reason) = &s.unavailable {
-        hud.set_cpu_text(format!("CPU — ({reason})").into());
-        hud.set_ram_text(format!("RAM — ({reason})").into());
-        hud.set_temp_text(format!("TEMP — ({reason})").into());
-        hud.set_gpu_text(format!("GPU — ({reason})").into());
-        return;
-    }
-    hud.set_cpu_text(format!("CPU {:.0}%", s.cpu.total).into());
-    hud.set_ram_text(
-        format!(
-            "RAM {}% {}",
-            s.mem.percent,
-            used_total_gb(s.mem.used, s.mem.total)
-        )
-        .into(),
-    );
-    hud.set_temp_text(format!("TEMP {}", shown(&s.thermal.cpu_c, |c| format!("{c}°C"))).into());
-    hud.set_gpu_text(gpu_text(s).into());
+    let v = view::build(s);
+    hud.set_cpu_total(field(&v.cpu_total));
+    hud.set_cpu_freq(field(&v.cpu_freq));
+    hud.set_cpu_temp(field(&v.cpu_temp));
+    hud.set_cpu_cores(field(&v.cpu_cores));
+    let bars: Vec<Bar> = v.core_bars.iter().map(bar).collect();
+    hud.set_core_bars(Rc::new(slint::VecModel::from(bars)).into());
+    hud.set_ram(field(&v.ram));
+    hud.set_ram_percent(v.ram_percent);
+    hud.set_ram_top(field(&v.ram_top));
+    hud.set_gpu_intel(field(&v.gpu_intel));
+    hud.set_gpu_nvidia(field(&v.gpu_nvidia));
+    hud.set_gpu_vram(field(&v.gpu_vram));
+    hud.set_disk(field(&v.disk));
+    hud.set_disk_percent(v.disk_percent);
+    hud.set_disk_io(field(&v.disk_io));
+    hud.set_net_down(field(&v.net_down));
+    hud.set_net_up(field(&v.net_up));
+    hud.set_net_today(field(&v.net_today));
+    hud.set_ping(field(&v.ping));
 }
 
-fn shown<T>(m: &Metric<T>, fmt: impl Fn(&T) -> String) -> String {
-    match m {
-        Metric::Available(v) => fmt(v),
-        Metric::Unavailable(reason) => format!("— ({reason})"),
-    }
-}
-
-fn gpu_text(s: &Snapshot) -> String {
-    let nv = &s.gpu.nvidia;
-    format!(
-        "NVIDIA {} {}\nIntel {}",
-        shown(&nv.usage_percent, |u| format!("{u}%")),
-        shown(&nv.temp_c, |t| format!("{t}°C")),
-        shown(&s.gpu.intel_usage_percent, |u| format!("{u:.0}%")),
-    )
+fn show_clock(hud: &Hud) {
+    let (_, secs) = winffi::local_now();
+    hud.set_clock(format!("{:02}:{:02}", secs / 3600, secs / 60 % 60).into());
 }
 
 fn run() -> Result<(), AppError> {
     let path = Rc::new(store::default_path()?);
     let hud = Hud::new()?;
+    show_snapshot(&hud, &Snapshot::unavailable(WAITING));
+    show_clock(&hud);
     let scale = hud.window().scale_factor();
     let size = Size {
         width: (HUD_SIZE.width as f32 * scale).round() as i32,
@@ -156,6 +90,7 @@ fn run() -> Result<(), AppError> {
         x: config.borrow().hud.x,
         y: config.borrow().hud.y,
     };
+    hud.set_bg_alpha(config.borrow().hud.opacity);
     let pos = clamp_to_screen(saved, size, screen);
     hud.window()
         .set_position(PhysicalPosition::new(pos.x, pos.y));
@@ -190,8 +125,11 @@ fn run() -> Result<(), AppError> {
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(250),
         move || {
-            if let (Some(hud), Some(s)) = (weak.upgrade(), snapshots.try_iter().last()) {
-                show_snapshot(&hud, &s);
+            if let Some(hud) = weak.upgrade() {
+                show_clock(&hud);
+                if let Some(s) = snapshots.try_iter().last() {
+                    show_snapshot(&hud, &s);
+                }
             }
         },
     );
@@ -204,5 +142,55 @@ fn main() {
     if let Err(e) = run() {
         eprintln!("hud-monitor: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const HUD: &str = include_str!("../ui/hud.slint");
+    const THEME: &str = include_str!("../ui/theme.slint");
+
+    fn families(src: &str) -> Vec<&str> {
+        src.lines()
+            .filter_map(|l| l.trim().strip_prefix("font-family:"))
+            .map(|v| v.trim().trim_end_matches(';'))
+            .collect()
+    }
+
+    #[test]
+    fn theme_maps_labels_to_rajdhani_and_numbers_to_share_tech_mono() {
+        assert!(THEME.contains(r#"label-font: "Rajdhani""#));
+        assert!(THEME.contains(r#"number-font: "Share Tech Mono""#));
+        assert!(THEME.contains("fonts/Rajdhani-Medium.ttf"));
+        assert!(THEME.contains("fonts/Rajdhani-SemiBold.ttf"));
+        assert!(THEME.contains("fonts/ShareTechMono-Regular.ttf"));
+    }
+
+    #[test]
+    fn every_text_in_the_hud_uses_one_of_the_two_fonts() {
+        let used = families(HUD);
+        assert!(!used.is_empty());
+        assert!(used
+            .iter()
+            .all(|f| matches!(*f, "Theme.label-font" | "Theme.number-font")));
+        assert!(used.contains(&"Theme.number-font"));
+    }
+
+    #[test]
+    fn unavailable_values_report_their_reason_on_hover() {
+        assert!(HUD.contains("root.field.tip != \"\""));
+        assert!(HUD.contains("root.tip(self.has-hover ? root.field.tip"));
+    }
+
+    #[test]
+    fn bar_colors_come_from_the_view_not_the_slint_file() {
+        assert!(HUD.contains("background: bar.color"));
+    }
+
+    #[test]
+    fn slint_window_size_matches_hud_size() {
+        use hud_core::config::HUD_SIZE;
+        assert!(HUD.contains(&format!("width: {}px;", HUD_SIZE.width)));
+        assert!(HUD.contains(&format!("height: {}px;", HUD_SIZE.height)));
     }
 }

@@ -95,3 +95,8 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 ## Verificações adicionais — T04 (E04)
 - Input: driver NVIDIA 471.11 (GeForce 920MX) sem `nvmlDeviceGetMemoryInfo_v2` → Expect: VRAM `Unavailable("VRAM indisponível neste driver")`, temperatura e uso da GPU NVIDIA continuam disponíveis.
 - Input: zonas térmicas e GPU Intel (HD 620) reais, build release → Expect: janela mostra `TEMP` em °C e uso da Intel em 
+## Verificações adicionais — T05 (E05)
+- Input: `SystemDrive` indisponível/disco não encontrado (fake com drive `D:`) → Expect: `usage == Unavailable("disco D: indisponível")`.
+- Input: `FileDayStore::save` duas vezes na mesma data → Expect: arquivo contém o último valor e nenhum `.tmp` sobra no diretório (escrita atômica por rename).
+- Input: contagem de núcleos físicos indisponível → Expect: rótulo `"—/4T · …"` com tooltip do motivo.
+- Input: build release rodando 30 s em i5-7200U, captura em `docs/screenshots/hud.png` → Expect: HUD 320x400 com fontes Rajdhani/Share Tech Mono, memória privada 14,3 MB (≤ 30 MB).

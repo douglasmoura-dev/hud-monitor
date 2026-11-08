@@ -1,0 +1,29 @@
+import "fonts/Rajdhani-Medium.ttf";
+import "fonts/Rajdhani-SemiBold.ttf";
+import "fonts/ShareTechMono-Regular.ttf";
+
+export struct Field {
+    text: string,
+    tip: string,
+}
+
+export struct Bar {
+    percent: float,
+    color: color,
+}
+
+export global Theme {
+    out property <color> teal: #5DCAA5;
+    out property <color> green: #1D9E75;
+    out property <color> purple: #7F77DD;
+    out property <color> amber: #EF9F27;
+    out property <color> blue: #85B7EB;
+    out property <color> text: #C9D4DD;
+    out property <color> dim: #7D8B97;
+    out property <color> track: #FFFFFF14;
+    out property <color> border: #1D9E7566;
+    out property <color> title-bar: #FFFFFF0A;
+    out property <color> tip-bar: #0E1620;
+    out property <string> label-font: "Rajdhani";
+    out property <string> number-font: "Share Tech Mono";
+}

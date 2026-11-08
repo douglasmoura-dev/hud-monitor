@@ -85,10 +85,18 @@ impl SystemSource for SysinfoSource {
         self.top.clone()
     }
 
+    fn physical_cores(&mut self) -> Option<usize> {
+        System::physical_core_count().ok()
+    }
+
+    fn system_drive(&self) -> Option<String> {
+        std::env::var("SystemDrive").ok()
+    }
+
     fn disk_usage(&mut self) -> Option<(u64, u64)> {
         self.disks
             .refresh_specifics(false, DiskRefreshKind::nothing().with_storage());
-        let drive = format!("{}\\", std::env::var("SystemDrive").ok()?);
+        let drive = format!("{}\\", self.system_drive()?);
         let disk = self
             .disks
             .iter()

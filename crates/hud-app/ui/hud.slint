@@ -1,0 +1,242 @@
+import { Bar, Field, Theme } from "theme.slint";
+
+component Label inherits Text {
+    color: Theme.dim;
+    font-family: Theme.label-font;
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+}
+
+component Val inherits Rectangle {
+    in property <Field> field;
+    in property <length> size: 13px;
+    in property <color> tint: Theme.text;
+    callback tip(string);
+    width: t.preferred-width;
+    height: t.preferred-height;
+    t := Text {
+        text: root.field.text;
+        color: root.field.tip == "" ? root.tint : Theme.dim;
+        font-family: Theme.number-font;
+        font-size: root.size;
+    }
+    TouchArea {
+        enabled: root.field.tip != "";
+        changed has-hover => { root.tip(self.has-hover ? root.field.tip : ""); }
+    }
+}
+
+component Meter inherits Rectangle {
+    in property <float> percent;
+    in property <color> tint;
+    height: 6px;
+    border-radius: 3px;
+    background: Theme.track;
+    Rectangle {
+        x: 0px;
+        width: parent.width * clamp(root.percent, 0, 100) / 100;
+        border-radius: 3px;
+        background: root.tint;
+    }
+}
+
+component Rule inherits Rectangle {
+    height: 1px;
+    background: Theme.track;
+}
+
+component Arrow inherits Path {
+    in property <bool> down;
+    width: 8px;
+    height: 7px;
+    commands: root.down ? "M 0 0 L 8 0 L 4 7 Z" : "M 0 7 L 8 7 L 4 0 Z";
+}
+
+component GpuCell inherits Rectangle {
+    in property <string> name;
+    in property <Field> field;
+    callback tip(string);
+    width: 96px;
+    height: 32px;
+    Label { x: 0px; y: 0px; text: root.name; }
+    Val { x: 0px; y: 14px; field: root.field; tip(s) => { root.tip(s); } }
+}
+
+export component Hud inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    width: 320px;
+    height: 400px;
+    callback moved(length, length);
+    callback released();
+    callback quit();
+    in property <float> bg-alpha: 0.88;
+    in property <string> clock: "--:--";
+    in property <Field> cpu-total;
+    in property <Field> cpu-freq;
+    in property <Field> cpu-temp;
+    in property <Field> cpu-cores;
+    in property <[Bar]> core-bars;
+    in property <Field> ram;
+    in property <float> ram-percent;
+    in property <Field> ram-top;
+    in property <Field> gpu-intel;
+    in property <Field> gpu-nvidia;
+    in property <Field> gpu-vram;
+    in property <Field> disk;
+    in property <float> disk-percent;
+    in property <Field> disk-io;
+    in property <Field> net-down;
+    in property <Field> net-up;
+    in property <Field> net-today;
+    in property <Field> ping;
+    property <string> hover-tip;
+
+    Rectangle {
+        background: rgba(10, 14, 20, root.bg-alpha);
+        border-color: Theme.border;
+        border-width: 1px;
+        border-radius: 6px;
+        clip: true;
+
+        // Title bar
+        Rectangle {
+            y: 0px;
+            height: 30px;
+            background: Theme.title-bar;
+            TouchArea {
+                moved => { root.moved(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
+                pointer-event(e) => { if e.kind == PointerEventKind.up { root.released(); } }
+            }
+            for row in [0, 1, 2]: Rectangle {
+                x: 10px;
+                y: 9px + row * 5px;
+                width: 8px;
+                height: 2px;
+                background: Theme.dim;
+            }
+            Text {
+                x: 26px;
+                text: "SYS // MONITOR";
+                color: Theme.teal;
+                font-family: Theme.label-font;
+                font-weight: 600;
+                font-size: 14px;
+                letter-spacing: 1.5px;
+                vertical-alignment: center;
+            }
+            Text {
+                x: parent.width - 138px;
+                width: 48px;
+                text: root.clock;
+                color: Theme.dim;
+                font-family: Theme.number-font;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+            Rectangle { // pin
+                x: parent.width - 80px;
+                y: 10px;
+                width: 10px;
+                height: 10px;
+                border-radius: 5px;
+                border-width: 1.5px;
+                border-color: Theme.dim;
+            }
+            Rectangle { // expand
+                x: parent.width - 56px;
+                y: 10px;
+                width: 10px;
+                height: 10px;
+                border-width: 1.5px;
+                border-color: Theme.dim;
+            }
+            TouchArea { // close
+                x: parent.width - 32px;
+                width: 28px;
+                clicked => { root.quit(); }
+                Path {
+                    x: 9px;
+                    y: 10px;
+                    width: 10px;
+                    height: 10px;
+                    commands: "M 0 0 L 10 10 M 10 0 L 0 10";
+                    stroke: Theme.dim;
+                    stroke-width: 1.5px;
+                }
+            }
+        }
+
+        // CPU
+        Label { x: 12px; y: 36px; text: "CPU"; }
+        Val { x: 12px; y: 48px; size: 28px; tint: Theme.teal; field: root.cpu-total; tip(s) => { root.hover-tip = s; } }
+        Val { x: 100px; y: 52px; field: root.cpu-freq; tip(s) => { root.hover-tip = s; } }
+        Val { x: 100px; y: 70px; field: root.cpu-temp; tip(s) => { root.hover-tip = s; } }
+        Val { x: 12px; y: 88px; size: 11px; tint: Theme.dim; field: root.cpu-cores; tip(s) => { root.hover-tip = s; } }
+        for bar[i] in root.core-bars: Rectangle {
+            x: 12px + i * 18px;
+            y: 106px;
+            width: 14px;
+            height: 28px;
+            background: Theme.track;
+            Rectangle {
+                y: parent.height * (1 - clamp(bar.percent, 0, 100) / 100);
+                height: parent.height - self.y;
+                background: bar.color;
+            }
+        }
+        Rule { x: 12px; y: 142px; width: parent.width - 24px; }
+
+        // RAM
+        Label { x: 12px; y: 148px; text: "RAM"; }
+        Val { x: parent.width - 12px - self.width; y: 146px; field: root.ram; tip(s) => { root.hover-tip = s; } }
+        Meter { x: 12px; y: 168px; width: parent.width - 24px; percent: root.ram-percent; tint: Theme.purple; }
+        Val { x: 12px; y: 178px; size: 10px; tint: Theme.dim; field: root.ram-top; tip(s) => { root.hover-tip = s; } }
+        Rule { x: 12px; y: 200px; width: parent.width - 24px; }
+
+        // GPU
+        Label { x: 12px; y: 206px; text: "GPU"; }
+        GpuCell { x: 12px; y: 222px; name: "INTEL"; field: root.gpu-intel; tip(s) => { root.hover-tip = s; } }
+        GpuCell { x: 112px; y: 222px; name: "NVIDIA"; field: root.gpu-nvidia; tip(s) => { root.hover-tip = s; } }
+        GpuCell { x: 212px; y: 222px; name: "VRAM"; field: root.gpu-vram; tip(s) => { root.hover-tip = s; } }
+        Rule { x: 12px; y: 262px; width: parent.width - 24px; }
+
+        // DISCO
+        Label { x: 12px; y: 268px; text: "DISCO"; }
+        Val { x: parent.width - 12px - self.width; y: 266px; field: root.disk; tip(s) => { root.hover-tip = s; } }
+        Meter { x: 12px; y: 288px; width: parent.width - 24px; percent: root.disk-percent; tint: Theme.amber; }
+        Val { x: 12px; y: 298px; size: 11px; tint: Theme.dim; field: root.disk-io; tip(s) => { root.hover-tip = s; } }
+        Rule { x: 12px; y: 318px; width: parent.width - 24px; }
+
+        // REDE
+        Label { x: 12px; y: 324px; text: "REDE"; }
+        Arrow { x: 12px; y: 345px; down: true; fill: Theme.teal; }
+        Val { x: 26px; y: 340px; tint: Theme.teal; field: root.net-down; tip(s) => { root.hover-tip = s; } }
+        Arrow { x: 160px; y: 345px; down: false; fill: Theme.blue; }
+        Val { x: 174px; y: 340px; tint: Theme.blue; field: root.net-up; tip(s) => { root.hover-tip = s; } }
+        Val { x: 12px; y: 362px; size: 11px; tint: Theme.dim; field: root.net-today; tip(s) => { root.hover-tip = s; } }
+        Val { x: 160px; y: 362px; size: 11px; tint: Theme.dim; field: root.ping; tip(s) => { root.hover-tip = s; } }
+
+        // Reason for an unavailable value, shown while it is hovered.
+        Rectangle {
+            visible: root.hover-tip != "";
+            y: parent.height - 22px;
+            height: 22px;
+            background: Theme.tip-bar;
+            Text {
+                x: 12px;
+                width: parent.width - 24px;
+                text: root.hover-tip;
+                color: Theme.amber;
+                font-family: Theme.label-font;
+                font-weight: 500;
+                font-size: 12px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
