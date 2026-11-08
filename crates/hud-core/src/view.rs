@@ -1,7 +1,9 @@
 //! Display text for the HUD, built from a `Snapshot`. Unavailable metrics become `—` plus the reason.
 
+use crate::config::{MiniBarItem, Orientation};
 use crate::format::{rate, size, used_total_gb};
 use crate::metrics::{CpuMetrics, Metric, Snapshot};
+use crate::position::Size;
 
 pub const DASH: &str = "—";
 pub const BAR_RED: u32 = 0x00E2_4B4A;
@@ -177,6 +179,87 @@ pub fn build(s: &Snapshot) -> HudView {
     }
 }
 
+const NOT_IMPLEMENTED: &str = "provedor ainda não implementado";
+pub const CHIP_SIZE: Size = Size {
+    width: 64,
+    height: 36,
+};
+pub const BAR_GAP: i32 = 4;
+pub const BAR_PADDING: i32 = 6;
+/// Length of the expand and close buttons together, along the bar's main axis.
+pub const BUTTONS_LEN: i32 = 40;
+
+/// One mini bar cell: a short label over a value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chip {
+    pub label: &'static str,
+    pub value: Field,
+}
+
+fn chip_label(item: MiniBarItem) -> &'static str {
+    match item {
+        MiniBarItem::Cpu => "CPU",
+        MiniBarItem::Ram => "RAM",
+        MiniBarItem::Net => "NET",
+        MiniBarItem::Temp => "TEMP",
+        MiniBarItem::Ping => "PING",
+        MiniBarItem::Gpu => "GPU",
+        MiniBarItem::Disk => "DISCO",
+        MiniBarItem::Claude5h => "5H",
+        MiniBarItem::Claude7d => "7D",
+    }
+}
+
+fn chip_value(item: MiniBarItem, v: &HudView) -> Field {
+    match item {
+        MiniBarItem::Cpu => v.cpu_total.clone(),
+        MiniBarItem::Ram => percent_field(&v.ram, v.ram_percent),
+        MiniBarItem::Net => v.net_down.clone(),
+        MiniBarItem::Temp => v.cpu_temp.clone(),
+        MiniBarItem::Ping => v.ping.clone(),
+        MiniBarItem::Gpu => v.gpu_nvidia.clone(),
+        MiniBarItem::Disk => percent_field(&v.disk, v.disk_percent),
+        MiniBarItem::Claude5h | MiniBarItem::Claude7d => Field::missing(NOT_IMPLEMENTED),
+    }
+}
+
+fn percent_field(source: &Field, percent: f32) -> Field {
+    if source.tip.is_empty() {
+        Field::ok(format!("{percent:.0}%"))
+    } else {
+        source.clone()
+    }
+}
+
+/// Chips in the configured order, built from the same view as the HUD.
+pub fn minibar_chips(items: &[MiniBarItem], s: &Snapshot) -> Vec<Chip> {
+    let v = build(s);
+    items
+        .iter()
+        .map(|&item| Chip {
+            label: chip_label(item),
+            value: chip_value(item, &v),
+        })
+        .collect()
+}
+
+/// Window size that fits `count` chips in a row or a column.
+pub fn minibar_size(count: usize, orientation: Orientation) -> Size {
+    let n = count as i32;
+    let along = |chip: i32| BUTTONS_LEN + n * (chip + BAR_GAP) + 2 * BAR_PADDING;
+    let across = |chip: i32| chip + 2 * BAR_PADDING;
+    match orientation {
+        Orientation::Horizontal => Size {
+            width: along(CHIP_SIZE.width),
+            height: across(CHIP_SIZE.height),
+        },
+        Orientation::Vertical => Size {
+            width: across(CHIP_SIZE.width),
+            height: along(CHIP_SIZE.height),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +366,34 @@ mod tests {
         let mut s = snapshot(vec![1.0]);
         s.mem.top.clear();
         assert_eq!(build(&s).ram_top.text, "—");
+    }
+
+    #[test]
+    fn chips_follow_configured_order_and_unimplemented_provider_is_dash() {
+        use MiniBarItem::*;
+        let chips = minibar_chips(&[Cpu, Ram, Net, Claude5h], &snapshot(vec![10.0]));
+        let labels: Vec<_> = chips.iter().map(|c| c.label).collect();
+        assert_eq!(labels, ["CPU", "RAM", "NET", "5H"]);
+        assert_eq!(chips[0].value.text, "62%");
+        assert_eq!(chips[1].value.text, "50%");
+        assert_eq!(chips[2].value.text, "4.2 MB/s");
+        assert_eq!(chips[3].value.text, "—");
+        assert_eq!(chips[3].value.tip, "provedor ainda não implementado");
+    }
+
+    #[test]
+    fn unavailable_source_gives_dash_chip_with_reason() {
+        use MiniBarItem::*;
+        let chips = minibar_chips(&[Temp, Ram], &Snapshot::unavailable("coleta falhou"));
+        assert!(chips.iter().all(|c| c.value.text == "—"));
+        assert_eq!(chips[1].value.tip, "coleta falhou");
+    }
+
+    #[test]
+    fn size_is_row_when_horizontal_and_column_when_vertical() {
+        let h = minibar_size(4, Orientation::Horizontal);
+        let v = minibar_size(4, Orientation::Vertical);
+        assert_eq!((h.width, h.height), (40 + 4 * 68 + 12, 48));
+        assert_eq!((v.width, v.height), (76, 40 + 4 * 40 + 12));
     }
 }

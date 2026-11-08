@@ -31,10 +31,17 @@ pub fn load_or_first_run(path: &Path, screen: Size) -> Result<Config, StoreError
     }
 }
 
-/// Stores the HUD position, keeping every other setting as loaded.
-pub fn save_hud_position(path: &Path, config: &mut Config, pos: Point) -> Result<(), StoreError> {
-    config.hud.x = pos.x;
-    config.hud.y = pos.y;
+/// Stores the mini bar position and which of the two windows is shown.
+pub fn save_minibar_state(
+    path: &Path,
+    config: &mut Config,
+    pos: Point,
+    minibar_visible: bool,
+) -> Result<(), StoreError> {
+    config.minibar.window.x = pos.x;
+    config.minibar.window.y = pos.y;
+    config.minibar.window.visible = minibar_visible;
+    config.hud.visible = !minibar_visible;
     config.save(path)?;
     Ok(())
 }
@@ -59,21 +66,24 @@ mod tests {
     }
 
     #[test]
-    fn saved_position_is_loaded_back() {
-        let path = temp("pos");
-        let mut c = Config::first_run(SCREEN);
-        save_hud_position(&path, &mut c, Point { x: 400, y: 300 }).unwrap();
-        let loaded = load_or_first_run(&path, SCREEN).unwrap();
-        std::fs::remove_file(path).unwrap();
-        assert_eq!((loaded.hud.x, loaded.hud.y), (400, 300));
-    }
-
-    #[test]
     fn invalid_file_is_an_error_not_a_default() {
         let path = temp("bad");
         std::fs::write(&path, "oops = [").unwrap();
         let r = load_or_first_run(&path, SCREEN);
         std::fs::remove_file(path).unwrap();
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn minibar_position_is_saved_apart_from_the_hud_position() {
+        let path = temp("mini");
+        let mut c = Config::first_run(SCREEN);
+        let hud = (c.hud.x, c.hud.y);
+        save_minibar_state(&path, &mut c, Point { x: 5, y: 6 }, true).unwrap();
+        let l = load_or_first_run(&path, SCREEN).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!((l.minibar.window.x, l.minibar.window.y), (5, 6));
+        assert_eq!((l.hud.x, l.hud.y), hud);
+        assert!(l.minibar.window.visible && !l.hud.visible);
     }
 }
