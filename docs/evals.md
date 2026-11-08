@@ -21,6 +21,7 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - Input: RAM 11.2 GiB de 16 GiB → Expect: `mem.percent == 70`, texto `"11.2/16 GB"`.
 - Input: acumulado de rede às 23:59:59 = 3.1 GB, depois 00:00:01 → Expect: total do dia volta a 0 e arquivo do dia anterior fica intacto.
 - Input: PDH de disco indisponível → Expect: campo `disk.io == Unavailable("contador indisponível")`, UI mostra `—`.
+- Input: release binary rodando 15 s no i5-7200U → Expect: processo vivo, ~0,01 CPU-s/s, ~27 MB, `net-AAAA-MM-DD.json` criado em `%APPDATA%\hud-monitor` (verificado manualmente em T03).
 
 ## E04 — Temperatura e GPU
 - Input: zonas PDH `\_TZ.TZ00 = 354.15 K`, `\_TZ.TZ01 = 340.15 K` → Expect: `thermal.cpu_c == 81`.

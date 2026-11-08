@@ -1,9 +1,13 @@
 #![windows_subsystem = "windows"]
 
+mod collect;
+mod sources;
 mod store;
 mod winffi;
 
 use hud_core::config::{Config, HUD_SIZE};
+use hud_core::format::used_total_gb;
+use hud_core::metrics::Snapshot;
 use hud_core::position::{clamp_to_screen, Point, Size};
 use slint::{ComponentHandle, PhysicalPosition};
 use std::{cell::RefCell, rc::Rc};
@@ -18,6 +22,8 @@ slint::slint! {
         callback moved(length, length);
         callback released();
         callback quit();
+        in property <string> cpu-text: "CPU —";
+        in property <string> ram-text: "RAM —";
 
         Rectangle {
             background: #070d14e6;
@@ -46,6 +52,21 @@ slint::slint! {
                     Text { text: "x"; color: #1fe0c8; horizontal-alignment: center; vertical-alignment: center; }
                 }
             }
+
+            Text {
+                x: 10px;
+                y: 44px;
+                text: root.cpu-text;
+                color: #e6f7f5;
+                font-size: 16px;
+            }
+            Text {
+                x: 10px;
+                y: 70px;
+                text: root.ram-text;
+                color: #e6f7f5;
+                font-size: 16px;
+            }
         }
     }
 }
@@ -63,6 +84,23 @@ fn save_position(hud: &Hud, path: &std::path::Path, config: &mut Config) {
     if let Err(e) = store::save_hud_position(path, config, Point { x: p.x, y: p.y }) {
         eprintln!("hud-monitor: could not save config: {e}");
     }
+}
+
+fn show_snapshot(hud: &Hud, s: &Snapshot) {
+    if let Some(reason) = &s.unavailable {
+        hud.set_cpu_text(format!("CPU — ({reason})").into());
+        hud.set_ram_text(format!("RAM — ({reason})").into());
+        return;
+    }
+    hud.set_cpu_text(format!("CPU {:.0}%", s.cpu.total).into());
+    hud.set_ram_text(
+        format!(
+            "RAM {}% {}",
+            s.mem.percent,
+            used_total_gb(s.mem.used, s.mem.total)
+        )
+        .into(),
+    );
 }
 
 fn run() -> Result<(), AppError> {
@@ -106,7 +144,20 @@ fn run() -> Result<(), AppError> {
             let _ = hud.hide();
         }
     });
+    let (snapshots, collection) = collect::spawn();
+    let weak = hud.as_weak();
+    let poll = slint::Timer::default();
+    poll.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(250),
+        move || {
+            if let (Some(hud), Some(s)) = (weak.upgrade(), snapshots.try_iter().last()) {
+                show_snapshot(&hud, &s);
+            }
+        },
+    );
     hud.run()?;
+    collection.shutdown();
     Ok(())
 }
 
