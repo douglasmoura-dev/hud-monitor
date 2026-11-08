@@ -186,4 +186,11 @@ mod tests {
     fn bar_colors_come_from_the_view_not_the_slint_file() {
         assert!(HUD.contains("background: bar.color"));
     }
+
+    #[test]
+    fn slint_window_size_matches_hud_size() {
+        use hud_core::config::HUD_SIZE;
+        assert!(HUD.contains(&format!("width: {}px;", HUD_SIZE.width)));
+        assert!(HUD.contains(&format!("height: {}px;", HUD_SIZE.height)));
+    }
 }
