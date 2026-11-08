@@ -18,6 +18,19 @@ impl FileDayStore {
     }
 }
 
+impl FileDayStore {
+    /// Writes a temp file in the same directory, then renames it over the target.
+    fn write_atomically(&self, date: Date, bytes: u64) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        let target = self.path(date);
+        let tmp = target.with_extension("json.tmp");
+        std::fs::write(&tmp, json!({ "bytes": bytes }).to_string())?;
+        std::fs::rename(&tmp, &target).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+    }
+}
+
 impl DayStore for FileDayStore {
     fn load(&self, date: Date) -> Option<u64> {
         let text = std::fs::read_to_string(self.path(date)).ok()?;
@@ -25,8 +38,7 @@ impl DayStore for FileDayStore {
     }
 
     fn save(&self, date: Date, bytes: u64) -> Result<(), DayStoreError> {
-        std::fs::create_dir_all(&self.dir)
-            .and_then(|()| std::fs::write(self.path(date), json!({ "bytes": bytes }).to_string()))
+        self.write_atomically(date, bytes)
             .map_err(|e| DayStoreError(e.to_string()))
     }
 }
@@ -59,6 +71,21 @@ mod tests {
         assert_eq!(store.load(D1), Some(3_100));
         assert_eq!(store.load(D2), Some(0));
         assert!(dir.join("net-2026-11-07.json").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn save_replaces_existing_file_and_leaves_no_temp_file() {
+        let dir = temp_dir().join("atomic");
+        let store = FileDayStore::new(dir.clone());
+        store.save(D1, 1).unwrap();
+        store.save(D1, 2).unwrap();
+        assert_eq!(store.load(D1), Some(2));
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("net-2026-11-07.json")]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

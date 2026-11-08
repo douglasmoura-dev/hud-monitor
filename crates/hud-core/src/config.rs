@@ -7,10 +7,10 @@ use std::{fs, io, path::Path};
 /// Single source of truth for the HUD window size (the Slint literal in hud-app must match).
 pub const HUD_SIZE: Size = Size {
     width: 320,
-    height: 200,
+    height: 440,
 };
 
-const DEFAULT_OPACITY: f32 = 0.9;
+const DEFAULT_OPACITY: f32 = 0.88;
 const DEFAULT_CPU: Threshold = Threshold {
     warn: 70.0,
     crit: 90.0,

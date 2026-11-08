@@ -4,10 +4,18 @@ use crate::sensors::{GpuMetrics, Sensors, ThermalMetrics};
 use std::{fmt, time::Duration};
 
 pub const DISK_IO_UNAVAILABLE: &str = "contador indisponível";
-pub const DISK_USAGE_UNAVAILABLE: &str = "disco C: indisponível";
+pub const CORES_UNAVAILABLE: &str = "contagem de núcleos indisponível";
 pub const FREQ_UNAVAILABLE: &str = "frequência indisponível";
 pub const SAVE_FAILED: &str = "não foi possível salvar o total do dia";
 pub const PING_UNAVAILABLE: &str = "sem resposta";
+/// Reason shown when the system drive cannot be read; names the real drive when known.
+pub fn disk_usage_unavailable(drive: Option<&str>) -> String {
+    match drive {
+        Some(d) => format!("disco {d} indisponível"),
+        None => "disco do sistema indisponível".to_string(),
+    }
+}
+
 const SECS_PER_DAY: u32 = 86_400;
 /// Upper bound between clock reads, so DST or manual clock changes are picked up.
 const RECHECK_SECS: u32 = 60;
@@ -52,6 +60,7 @@ pub struct CpuMetrics {
     pub threads: Vec<f32>,
     pub above_50: usize,
     pub freq_mhz: Metric<u64>,
+    pub cores: Metric<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,6 +119,7 @@ impl Snapshot {
                 threads: Vec::new(),
                 above_50: 0,
                 freq_mhz: Metric::unavailable(reason),
+                cores: Metric::unavailable(reason),
             },
             mem: MemMetrics {
                 used: 0,
@@ -167,6 +177,10 @@ pub trait SystemSource {
     /// Usage in percent of every logical thread.
     fn cpu_threads(&mut self) -> Vec<f32>;
     fn cpu_freq_mhz(&mut self) -> Option<u64>;
+    /// Physical core count.
+    fn physical_cores(&mut self) -> Option<usize>;
+    /// System drive as `"C:"`, from `%SystemDrive%`.
+    fn system_drive(&self) -> Option<String>;
     /// `(used, total)` bytes.
     fn memory(&mut self) -> (u64, u64);
     fn top_processes(&mut self) -> Vec<ProcessMem>;
@@ -272,11 +286,16 @@ impl<S: SystemSource, D: DiskIoSource, T: DayStore> Collector<S, D, T> {
             Some(f) if f > 0 => Metric::Available(f),
             _ => Metric::unavailable(FREQ_UNAVAILABLE),
         };
+        let cores = match self.system.physical_cores() {
+            Some(c) if c > 0 => Metric::Available(c),
+            _ => Metric::unavailable(CORES_UNAVAILABLE),
+        };
         CpuMetrics {
             total,
             threads,
             above_50,
             freq_mhz,
+            cores,
         }
     }
 
@@ -297,10 +316,12 @@ impl<S: SystemSource, D: DiskIoSource, T: DayStore> Collector<S, D, T> {
 
     fn disk(&mut self) -> DiskMetrics {
         DiskMetrics {
-            usage: self.system.disk_usage().map_or(
-                Metric::unavailable(DISK_USAGE_UNAVAILABLE),
-                Metric::Available,
-            ),
+            usage: match self.system.disk_usage() {
+                Some(u) => Metric::Available(u),
+                None => Metric::Unavailable(disk_usage_unavailable(
+                    self.system.system_drive().as_deref(),
+                )),
+            },
             io: self
                 .disk_io
                 .sample()
@@ -358,6 +379,7 @@ mod tests {
         threads: Vec<f32>,
         mem: (u64, u64),
         net: Rc<RefCell<(u64, u64)>>,
+        no_disk: bool,
     }
 
     impl SystemSource for FakeSystem {
@@ -367,6 +389,12 @@ mod tests {
         fn cpu_freq_mhz(&mut self) -> Option<u64> {
             Some(2500)
         }
+        fn physical_cores(&mut self) -> Option<usize> {
+            Some(2)
+        }
+        fn system_drive(&self) -> Option<String> {
+            Some("D:".to_string())
+        }
         fn memory(&mut self) -> (u64, u64) {
             self.mem
         }
@@ -374,7 +402,7 @@ mod tests {
             Vec::new()
         }
         fn disk_usage(&mut self) -> Option<(u64, u64)> {
-            Some((100, 200))
+            (!self.no_disk).then_some((100, 200))
         }
         fn net_counters(&mut self) -> (u64, u64) {
             *self.net.borrow()
@@ -601,5 +629,28 @@ mod tests {
     #[test]
     fn date_displays_iso() {
         assert_eq!(D1.to_string(), "2026-11-07");
+    }
+
+    #[test]
+    fn disk_unavailable_reason_names_the_real_drive() {
+        let system = FakeSystem {
+            no_disk: true,
+            ..FakeSystem::default()
+        };
+        let mut c = Collector::new(system, NoDiskIo, MemStore::default(), D1);
+        let s = c.tick(1.0, D1, Metric::unavailable("x"), Sensors::unavailable("x"));
+        assert_eq!(
+            s.disk.usage,
+            Metric::Unavailable("disco D: indisponível".into())
+        );
+        assert_eq!(s.cpu.cores, Metric::Available(2));
+    }
+
+    #[test]
+    fn disk_reason_without_known_drive_is_generic() {
+        assert_eq!(
+            disk_usage_unavailable(None),
+            "disco do sistema indisponível"
+        );
     }
 }
