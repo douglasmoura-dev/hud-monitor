@@ -78,6 +78,7 @@ export component Hud inherits Window {
     callback minimize();
     callback pin();
     in property <bool> pinned;
+    in property <string> notice;
     in property <float> bg-alpha: 0.88;
     in property <string> clock: "--:--";
     in property <Field> cpu-total;
@@ -239,14 +240,14 @@ export component Hud inherits Window {
 
         // Reason for an unavailable value, shown while it is hovered.
         Rectangle {
-            visible: root.hover-tip != "";
+            visible: root.hover-tip != "" || root.notice != "";
             y: parent.height - 22px;
             height: 22px;
             background: Theme.tip-bar;
             Text {
                 x: 12px;
                 width: parent.width - 24px;
-                text: root.hover-tip;
+                text: root.hover-tip != "" ? root.hover-tip : root.notice;
                 color: Theme.amber;
                 font-family: Theme.label-font;
                 font-weight: 500;

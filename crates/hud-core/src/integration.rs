@@ -58,6 +58,23 @@ pub fn register_hotkeys(api: &mut dyn HotkeyApi, hotkeys: &Hotkeys) -> Vec<Strin
         .collect()
 }
 
+/// One-line notice for the HUD tip bar about shell features that could not start.
+pub fn shell_notice(
+    tray_error: Option<&str>,
+    hotkeys_error: Option<&str>,
+    hotkey_warnings: &[String],
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(e) = tray_error {
+        parts.push(format!("bandeja indisponível: {e}"));
+    }
+    if let Some(e) = hotkeys_error {
+        parts.push(format!("atalhos indisponíveis: {e}"));
+    }
+    parts.extend(hotkey_warnings.iter().cloned());
+    parts.join(" · ")
+}
+
 /// The `Run` registry key of the current user.
 pub trait RunKey {
     fn set(&mut self, name: &str, command: &str) -> Result<(), IntegrationError>;
@@ -138,6 +155,17 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Ctrl+Alt+M"));
         assert!(register_hotkeys(&mut FakeHotkeys("none"), &hotkeys()).is_empty());
+    }
+
+    #[test]
+    fn notice_names_each_failed_feature_and_is_empty_when_all_works() {
+        assert_eq!(shell_notice(None, None, &[]), "");
+        let warnings = register_hotkeys(&mut FakeHotkeys("Ctrl+Alt+H"), &hotkeys());
+        let n = shell_notice(Some("sem bandeja"), Some("já em uso"), &warnings);
+        assert!(
+            n.starts_with("bandeja indisponível: sem bandeja · atalhos indisponíveis: já em uso")
+        );
+        assert!(n.contains("Ctrl+Alt+H"));
     }
 
     #[derive(Default)]

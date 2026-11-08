@@ -7,7 +7,7 @@ mod store;
 mod winffi;
 
 use hud_core::config::{Config, Orientation, HUD_SIZE};
-use hud_core::integration::{apply_autostart, register_hotkeys, IntegrationError};
+use hud_core::integration::{apply_autostart, register_hotkeys, shell_notice, IntegrationError};
 use hud_core::metrics::Snapshot;
 use hud_core::position::{clamp_to_screen, Point, Size};
 use hud_core::view;
@@ -17,7 +17,7 @@ use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 slint::include_modules!();
 
-const POLL_MS: u64 = 100;
+const FAST_POLL_MS: u64 = 100;
 const WAITING: &str = "aguardando a primeira leitura";
 
 #[derive(Debug, thiserror::Error)]
@@ -261,17 +261,22 @@ fn run() -> Result<(), AppError> {
     place(bar.window(), bar_at, bar_size, screen);
     sync_autostart(config.autostart);
 
-    let tray = Tray::new(&config.profiles)
-        .map_err(|e| eprintln!("hud-monitor: {e}"))
-        .ok();
-    let mut hotkeys = shell::Hotkeys::new()
-        .map_err(|e| eprintln!("hud-monitor: global hotkeys unavailable: {e}"))
-        .ok();
-    if let Some(h) = hotkeys.as_mut() {
-        for warning in register_hotkeys(h, &config.hotkeys) {
-            eprintln!("hud-monitor: {warning}");
-        }
+    let tray = Tray::new(&config.profiles);
+    let mut hotkeys = shell::Hotkeys::new();
+    let mut hotkey_warnings = Vec::new();
+    if let Ok(h) = hotkeys.as_mut() {
+        hotkey_warnings = register_hotkeys(h, &config.hotkeys);
     }
+    let notice = shell_notice(
+        tray.as_ref().err().map(ToString::to_string).as_deref(),
+        hotkeys.as_ref().err().map(ToString::to_string).as_deref(),
+        &hotkey_warnings,
+    );
+    if !notice.is_empty() {
+        eprintln!("hud-monitor: {notice}");
+        hud.set_notice(notice.as_str().into());
+    }
+    let (tray, hotkeys) = (Rc::new(tray.ok()), hotkeys.ok());
     let toggle_hud_combo = config.hotkeys.toggle_hud.clone();
 
     let w = Windows {
@@ -308,12 +313,32 @@ fn run() -> Result<(), AppError> {
     bar.on_expand(move || to_hud.switch_to(false));
 
     let (snapshots, collection) = collect::spawn();
-    let (hud_look, bar_look) = (NativeLook::default(), NativeLook::default());
-    let poll = slint::Timer::default();
+    let looks = Rc::new((NativeLook::default(), NativeLook::default()));
+    let refresh_looks = {
+        let (w, looks) = (w.clone(), looks.clone());
+        move || {
+            let (Some(hud), Some(bar)) = (w.hud.upgrade(), w.bar.upgrade()) else {
+                return;
+            };
+            let ctrl = winffi::ctrl_down();
+            let c = w.config.borrow();
+            looks
+                .0
+                .refresh(hud.window(), &c.hud, ctrl, |a| hud.set_bg_alpha(a));
+            looks.1.refresh(bar.window(), &c.minibar.window, ctrl, |a| {
+                bar.set_bg_alpha(a)
+            });
+        }
+    };
+
+    // 1 Hz: clock, metrics, tray tooltip, and a style refresh that catches recreated windows.
+    let slow = slint::Timer::default();
     let ticker = w.clone();
-    poll.start(
+    let slow_tray = tray.clone();
+    let slow_refresh = refresh_looks.clone();
+    slow.start(
         slint::TimerMode::Repeated,
-        std::time::Duration::from_millis(POLL_MS),
+        std::time::Duration::from_secs(1),
         move || {
             let (Some(hud), Some(bar)) = (ticker.hud.upgrade(), ticker.bar.upgrade()) else {
                 return;
@@ -323,11 +348,23 @@ fn run() -> Result<(), AppError> {
                 show_snapshot(&hud, &s);
                 let items = ticker.config.borrow().minibar.items.clone();
                 bar.set_chips(chip_model(&view::minibar_chips(&items, &s)));
-                if let Some(tray) = &tray {
+                if let Some(tray) = slow_tray.as_ref() {
                     tray.set_tooltip(&view::tray_tooltip(&s));
                 }
             }
-            if let Some(tray) = &tray {
+            slow_refresh();
+        },
+    );
+
+    // 100 ms: only drains tray/hotkey events and reacts when Ctrl changes.
+    let fast = slint::Timer::default();
+    let ticker = w.clone();
+    let ctrl_was_down = std::cell::Cell::new(false);
+    fast.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(FAST_POLL_MS),
+        move || {
+            if let Some(tray) = tray.as_ref() {
                 for action in tray.poll() {
                     ticker.handle(action);
                 }
@@ -342,11 +379,9 @@ fn run() -> Result<(), AppError> {
                 }
             }
             let ctrl = winffi::ctrl_down();
-            let c = ticker.config.borrow();
-            hud_look.refresh(hud.window(), &c.hud, ctrl, |a| hud.set_bg_alpha(a));
-            bar_look.refresh(bar.window(), &c.minibar.window, ctrl, |a| {
-                bar.set_bg_alpha(a)
-            });
+            if ctrl_was_down.replace(ctrl) != ctrl {
+                refresh_looks();
+            }
         },
     );
     w.apply_visibility();
