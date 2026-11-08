@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod appearance;
 pub mod config;
 pub mod format;

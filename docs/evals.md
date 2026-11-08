@@ -110,3 +110,7 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - Ctrl simulado por `keybd_event`: segurado → `WS_EX_TRANSPARENT` removido; solto → volta. Config com `autostart = false` → valor `hud-monitor` removido do `Run` (confirmado por leitura do registro; nenhum valor deixado na máquina).
 - Atalho `Ctrl+Alt+M` simulado → config salva com barrinha visível e HUD oculto. Tooltip, menu da bandeja (perfis, sair) e conflito real de atalho: só cobertos por testes com fakes, clique real na bandeja não automatizado.
 - Pino do HUD: alterna clicar através (Ctrl suspende); coberto por teste do `.slint`.
+
+## Verificações T08 (issue #9)
+- `cargo test`: `alerts::tests` cobre 72 → Warn, 91 → Crit, temperatura `Unavailable` → sem alerta, limiar por métrica, snapshot degradado sem alerta; `config::tests` cobre Crit com HUD e barrinha escondidos → barrinha visível; `view::tests` cobre cores âmbar `#EF9F27`/vermelho `#E24B4A` no HUD e nos chips.
+- `target\release\hud-app.exe` iniciou e rodou 6 s sem falhar (cor sob alerta real não foi forçada na tela).

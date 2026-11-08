@@ -6,7 +6,8 @@ mod sources;
 mod store;
 mod winffi;
 
-use hud_core::config::{Config, Orientation, HUD_SIZE};
+use hud_core::alerts::evaluate;
+use hud_core::config::{Config, Orientation, Thresholds, HUD_SIZE};
 use hud_core::integration::{apply_autostart, register_hotkeys, shell_notice, IntegrationError};
 use hud_core::metrics::Snapshot;
 use hud_core::position::{clamp_to_screen, Point, Size};
@@ -32,6 +33,7 @@ fn field(f: &view::Field) -> Field {
     Field {
         text: f.text.as_str().into(),
         tip: f.tip.as_str().into(),
+        level: f.level as i32,
     }
 }
 
@@ -43,8 +45,8 @@ fn bar(b: &view::CoreBar) -> Bar {
     }
 }
 
-fn show_snapshot(hud: &Hud, s: &Snapshot) {
-    let v = view::build(s);
+fn show_snapshot(hud: &Hud, s: &Snapshot, t: &Thresholds) {
+    let v = view::build_alerted(s, t);
     hud.set_cpu_total(field(&v.cpu_total));
     hud.set_cpu_freq(field(&v.cpu_freq));
     hud.set_cpu_temp(field(&v.cpu_temp));
@@ -159,6 +161,14 @@ impl Windows {
         self.apply_visibility();
     }
 
+    /// A crit alert must be seen: shows the mini bar when both windows are hidden.
+    fn escalate(&self) {
+        let revealed = self.config.borrow_mut().reveal_minibar_if_hidden();
+        if revealed {
+            self.apply_visibility();
+        }
+    }
+
     fn toggle_hud(&self) {
         self.config.borrow_mut().toggle_hud();
         self.apply_visibility();
@@ -236,10 +246,14 @@ fn run() -> Result<(), AppError> {
     let screen = winffi::screen_size();
     let config = store::load_or_first_run(&path, screen)?;
     let waiting = Snapshot::unavailable(WAITING);
-    show_snapshot(&hud, &waiting);
+    show_snapshot(&hud, &waiting, &config.thresholds);
     show_clock(&hud);
     let items = config.minibar.items.clone();
-    bar.set_chips(chip_model(&view::minibar_chips(&items, &waiting)));
+    bar.set_chips(chip_model(&view::minibar_chips(
+        &items,
+        &waiting,
+        &config.thresholds,
+    )));
     hud.set_bg_alpha(effective_opacity(config.hud.opacity));
     hud.set_pinned(config.hud.click_through);
     bar.set_bg_alpha(effective_opacity(config.minibar.window.opacity));
@@ -336,6 +350,7 @@ fn run() -> Result<(), AppError> {
     let ticker = w.clone();
     let slow_tray = tray.clone();
     let slow_refresh = refresh_looks.clone();
+    let mut was_crit = false;
     slow.start(
         slint::TimerMode::Repeated,
         std::time::Duration::from_secs(1),
@@ -345,9 +360,17 @@ fn run() -> Result<(), AppError> {
             };
             show_clock(&hud);
             if let Some(s) = snapshots.try_iter().last() {
-                show_snapshot(&hud, &s);
-                let items = ticker.config.borrow().minibar.items.clone();
-                bar.set_chips(chip_model(&view::minibar_chips(&items, &s)));
+                let (items, thresholds) = {
+                    let c = ticker.config.borrow();
+                    (c.minibar.items.clone(), c.thresholds.clone())
+                };
+                show_snapshot(&hud, &s, &thresholds);
+                bar.set_chips(chip_model(&view::minibar_chips(&items, &s, &thresholds)));
+                let crit = evaluate(&s, &thresholds).any_crit();
+                if crit && !was_crit {
+                    ticker.escalate();
+                }
+                was_crit = crit;
                 if let Some(tray) = slow_tray.as_ref() {
                     tray.set_tooltip(&view::tray_tooltip(&s));
                 }

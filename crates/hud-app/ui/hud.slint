@@ -20,7 +20,7 @@ component Val inherits Rectangle {
     height: t.preferred-height;
     t := Text {
         text: root.field.text;
-        color: root.field.tip == "" ? root.tint : Theme.dim;
+        color: root.field.tip == "" ? Theme.tone(root.field.level, root.tint) : Theme.dim;
         font-family: Theme.number-font;
         font-size: root.size;
     }

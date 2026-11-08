@@ -5,6 +5,7 @@ import "fonts/ShareTechMono-Regular.ttf";
 export struct Field {
     text: string,
     tip: string,
+    level: int,
 }
 
 export struct Bar {
@@ -29,6 +30,9 @@ export global Theme {
     out property <color> border: #1D9E7566;
     out property <color> title-bar: #FFFFFF0A;
     out property <color> tip-bar: #0E1620;
+    pure public function tone(level: int, base: color) -> color {
+        level == 2 ? #E24B4A : level == 1 ? #EF9F27 : base
+    }
     out property <string> label-font: "Rajdhani";
     out property <string> number-font: "Share Tech Mono";
 }
