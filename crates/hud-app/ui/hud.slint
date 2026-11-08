@@ -76,6 +76,9 @@ export component Hud inherits Window {
     callback released();
     callback quit();
     callback minimize();
+    callback pin();
+    in property <bool> pinned;
+    in property <string> notice;
     in property <float> bg-alpha: 0.88;
     in property <string> clock: "--:--";
     in property <Field> cpu-total;
@@ -141,14 +144,20 @@ export component Hud inherits Window {
                 vertical-alignment: center;
                 horizontal-alignment: right;
             }
-            Rectangle { // pin
-                x: parent.width - 80px;
-                y: 10px;
-                width: 10px;
-                height: 10px;
-                border-radius: 5px;
-                border-width: 1.5px;
-                border-color: Theme.dim;
+            TouchArea { // pin: toggles click-through (hold Ctrl to interact meanwhile)
+                x: parent.width - 86px;
+                width: 22px;
+                clicked => { root.pin(); }
+                Rectangle {
+                    x: 6px;
+                    y: 10px;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    border-width: 1.5px;
+                    border-color: root.pinned || parent.has-hover ? Theme.teal : Theme.dim;
+                    background: root.pinned ? Theme.teal : transparent;
+                }
             }
             TouchArea { // minimize to the mini bar
                 x: parent.width - 62px;
@@ -231,14 +240,14 @@ export component Hud inherits Window {
 
         // Reason for an unavailable value, shown while it is hovered.
         Rectangle {
-            visible: root.hover-tip != "";
+            visible: root.hover-tip != "" || root.notice != "";
             y: parent.height - 22px;
             height: 22px;
             background: Theme.tip-bar;
             Text {
                 x: 12px;
                 width: parent.width - 24px;
-                text: root.hover-tip;
+                text: root.hover-tip != "" ? root.hover-tip : root.notice;
                 color: Theme.amber;
                 font-family: Theme.label-font;
                 font-weight: 500;

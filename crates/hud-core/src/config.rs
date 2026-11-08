@@ -1,5 +1,6 @@
 //! Persisted configuration: window states, mini bar, profiles, thresholds, hotkeys.
 
+use crate::appearance::MIN_OPACITY;
 use crate::position::{first_run_position, Size, MARGIN};
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
@@ -67,6 +68,10 @@ pub struct WindowState {
     pub y: i32,
     pub opacity: f32,
     pub visible: bool,
+    #[serde(default)]
+    pub acrylic: bool,
+    #[serde(default)]
+    pub click_through: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,7 +124,7 @@ fn invalid(field: &'static str) -> ConfigError {
 }
 
 fn check_window(w: &WindowState, field: &'static str) -> Result<(), ConfigError> {
-    if (0.0..=1.0).contains(&w.opacity) {
+    if (MIN_OPACITY..=1.0).contains(&w.opacity) {
         Ok(())
     } else {
         Err(invalid(field))
@@ -177,6 +182,8 @@ impl Config {
                 y: hud_pos.y,
                 opacity: DEFAULT_OPACITY,
                 visible: true,
+                acrylic: false,
+                click_through: false,
             },
             minibar: MiniBar {
                 window: WindowState {
@@ -184,6 +191,8 @@ impl Config {
                     y: hud_pos.y + HUD_SIZE.height + MARGIN,
                     opacity: DEFAULT_OPACITY,
                     visible: false,
+                    acrylic: false,
+                    click_through: false,
                 },
                 items: vec![
                     MiniBarItem::Cpu,
@@ -245,6 +254,22 @@ impl Config {
                 Err(invalid("active_profile"))
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Hotkey for the HUD: hides it when shown, otherwise shows it in place of the mini bar.
+    pub fn toggle_hud(&mut self) {
+        self.hud.visible = !self.hud.visible;
+        if self.hud.visible {
+            self.minibar.window.visible = false;
+        }
+    }
+
+    /// Hotkey for the mini bar: hides it when shown, otherwise shows it in place of the HUD.
+    pub fn toggle_minibar(&mut self) {
+        self.minibar.window.visible = !self.minibar.window.visible;
+        if self.minibar.window.visible {
+            self.hud.visible = false;
         }
     }
 
@@ -485,5 +510,48 @@ mod tests {
             Config::from_toml("not = [toml"),
             Err(ConfigError::Parse(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod appearance_tests {
+    use super::*;
+
+    const SCREEN: Size = Size {
+        width: 1920,
+        height: 1080,
+    };
+
+    #[test]
+    fn toggling_a_window_hides_it_or_swaps_it_for_the_other() {
+        let mut c = Config::first_run(SCREEN);
+        c.toggle_hud();
+        assert!(!c.hud.visible && !c.minibar.window.visible);
+        c.toggle_minibar();
+        assert!(c.minibar.window.visible && !c.hud.visible);
+        c.toggle_hud();
+        assert!(c.hud.visible && !c.minibar.window.visible);
+    }
+
+    #[test]
+    fn opacity_below_twenty_percent_is_invalid() {
+        let mut c = Config::first_run(SCREEN);
+        c.hud.opacity = 0.1;
+        assert!(c.validate().is_err());
+        c.hud.opacity = 0.2;
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn config_saved_before_acrylic_and_click_through_still_loads() {
+        let c = Config::first_run(SCREEN);
+        let old: String = c
+            .to_toml()
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with("acrylic") && !l.starts_with("click_through"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert_eq!(Config::from_toml(&old).unwrap(), c);
     }
 }

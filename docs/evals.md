@@ -104,3 +104,9 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 ## E06 — verificações executadas (T06)
 - Executei `target\release\hud-app.exe` com config em `%APPDATA%` temporário (barrinha visível, itens `[Cpu, Ram, Net, Claude5h]`, horizontal) por 30 s: 4 chips nessa ordem em linha, `5H` mostra `—` ("provedor ainda não implementado"); captura em `docs/screenshots/minibar.png`. Memória privada: 13,8 MB (orçamento 30 MB).
 - Botões expandir/fechar na barrinha e minimizar no HUD: cobertos por testes do `.slint` e por `save_minibar_state`; o clique real não foi automatizado.
+
+## E07 — verificações executadas (T07)
+- Executei `target\release\hud-app.exe` com `%APPDATA%` temporário e config com HUD `opacity = 0.55`, `acrylic = true`, `click_through = true`, `autostart = true`: nenhum aviso no stderr (acrílico via `SetWindowCompositionAttribute` aplicado; captura em `docs/screenshots/hud-acrylic.png`), estilo estendido `0xC0138` (`WS_EX_TRANSPARENT` e `WS_EX_LAYERED` presentes) e `HKCU\...\Run\hud-monitor` apontando para o exe entre aspas. Memória privada: 14,3 MB (orçamento 30 MB).
+- Ctrl simulado por `keybd_event`: segurado → `WS_EX_TRANSPARENT` removido; solto → volta. Config com `autostart = false` → valor `hud-monitor` removido do `Run` (confirmado por leitura do registro; nenhum valor deixado na máquina).
+- Atalho `Ctrl+Alt+M` simulado → config salva com barrinha visível e HUD oculto. Tooltip, menu da bandeja (perfis, sair) e conflito real de atalho: só cobertos por testes com fakes, clique real na bandeja não automatizado.
+- Pino do HUD: alterna clicar através (Ctrl suspende); coberto por teste do `.slint`.

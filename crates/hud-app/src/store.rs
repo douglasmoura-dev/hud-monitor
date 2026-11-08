@@ -31,17 +31,17 @@ pub fn load_or_first_run(path: &Path, screen: Size) -> Result<Config, StoreError
     }
 }
 
-/// Stores the mini bar position and which of the two windows is shown.
-pub fn save_minibar_state(
+/// Stores both window positions; the visibility flags are already live in `config`.
+pub fn save_window_state(
     path: &Path,
     config: &mut Config,
-    pos: Point,
-    minibar_visible: bool,
+    hud: Point,
+    minibar: Point,
 ) -> Result<(), StoreError> {
-    config.minibar.window.x = pos.x;
-    config.minibar.window.y = pos.y;
-    config.minibar.window.visible = minibar_visible;
-    config.hud.visible = !minibar_visible;
+    config.hud.x = hud.x;
+    config.hud.y = hud.y;
+    config.minibar.window.x = minibar.x;
+    config.minibar.window.y = minibar.y;
     config.save(path)?;
     Ok(())
 }
@@ -75,15 +75,15 @@ mod tests {
     }
 
     #[test]
-    fn minibar_position_is_saved_apart_from_the_hud_position() {
+    fn window_positions_and_visibility_are_saved() {
         let path = temp("mini");
         let mut c = Config::first_run(SCREEN);
-        let hud = (c.hud.x, c.hud.y);
-        save_minibar_state(&path, &mut c, Point { x: 5, y: 6 }, true).unwrap();
+        c.toggle_minibar();
+        save_window_state(&path, &mut c, Point { x: 1, y: 2 }, Point { x: 5, y: 6 }).unwrap();
         let l = load_or_first_run(&path, SCREEN).unwrap();
         std::fs::remove_file(path).unwrap();
+        assert_eq!((l.hud.x, l.hud.y), (1, 2));
         assert_eq!((l.minibar.window.x, l.minibar.window.y), (5, 6));
-        assert_eq!((l.hud.x, l.hud.y), hud);
         assert!(l.minibar.window.visible && !l.hud.visible);
     }
 }

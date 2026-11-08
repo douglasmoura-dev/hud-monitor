@@ -243,6 +243,16 @@ pub fn minibar_chips(items: &[MiniBarItem], s: &Snapshot) -> Vec<Chip> {
         .collect()
 }
 
+/// One-line tray tooltip: CPU, RAM and temperature, `—` where unavailable.
+pub fn tray_tooltip(s: &Snapshot) -> String {
+    let v = build(s);
+    let ram = percent_field(&v.ram, v.ram_percent);
+    format!(
+        "CPU {} · RAM {} · {}",
+        v.cpu_total.text, ram.text, v.cpu_temp.text
+    )
+}
+
 /// Window size that fits `count` chips in a row or a column.
 pub fn minibar_size(count: usize, orientation: Orientation) -> Size {
     let n = count as i32;
@@ -327,6 +337,11 @@ mod tests {
         assert_eq!(v.disk_io.tip, "contador indisponível");
         assert_eq!(v.cpu_freq.text, "3.4GHz");
         assert!(v.cpu_freq.tip.is_empty());
+    }
+
+    #[test]
+    fn tray_tooltip_summarises_cpu_ram_and_temperature() {
+        assert_eq!(tray_tooltip(&snapshot(vec![10.0])), "CPU 62% · RAM 50% · —");
     }
 
     #[test]
