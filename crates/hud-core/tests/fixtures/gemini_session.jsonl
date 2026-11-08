@@ -1,0 +1,8 @@
+{"sessionId":"s1","projectHash":"p1","startTime":"2026-11-07T14:59:00.000Z","kind":"main"}
+{"id":"u1","timestamp":"2026-11-07T14:59:30.000Z","type":"user","content":[{"text":"oi"}]}
+{"id":"a","timestamp":"2026-11-07T15:00:00.000Z","type":"gemini","content":"ola","tokens":{"total":10},"model":"gemini-x"}
+{"$set":{"lastUpdated":"2026-11-07T15:00:01.000Z"}}
+{"id":"a","timestamp":"2026-11-07T15:00:00.000Z","type":"gemini","content":"ola","tokens":{"total":10},"toolCalls":[]}
+{"id":"b","timestamp":"2026-11-07T01:00:00.000Z","type":"gemini","content":"antes","tokens":{"total":5}}
+{"id":"c","timestamp":"2026-11-06T10:00:00.000Z","type":"gemini","content":"ontem","tokens":{"total":5}}
+not json at all

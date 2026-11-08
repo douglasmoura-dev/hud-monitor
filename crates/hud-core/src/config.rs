@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path};
 
 /// Single source of truth for the HUD window size (the Slint literal in hud-app must match).
-/// HUD height without the Codex section; `HUD_SIZE` is the tallest layout.
+/// HUD height with only Claude listed; `HUD_SIZE` is the tallest layout (every provider listed).
 pub const HUD_BASE_HEIGHT: i32 = 500;
 pub const HUD_SIZE: Size = Size {
     width: 320,
-    height: 566,
+    height: 732,
 };
 
 const DEFAULT_OPACITY: f32 = 0.88;

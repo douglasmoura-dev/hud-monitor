@@ -2,6 +2,7 @@ pub mod ai;
 pub mod alerts;
 pub mod appearance;
 pub mod config;
+pub mod extras;
 pub mod format;
 pub mod integration;
 pub mod metrics;
