@@ -519,13 +519,13 @@ mod tests {
     }
 
     struct FakeSystem {
-        admin: bool,
+        elevated: bool,
         docker: bool,
     }
 
     impl SystemProbe for FakeSystem {
         fn is_admin(&self) -> bool {
-            self.admin
+            self.elevated
         }
         fn docker_installed(&self) -> bool {
             self.docker
@@ -550,10 +550,10 @@ mod tests {
         }
     }
 
-    fn scan(fs: &FakeFs, admin: bool, docker: bool) -> Vec<Category> {
+    fn scan(fs: &FakeFs, elevated: bool, docker: bool) -> Vec<Category> {
         let mut out = Vec::new();
         let cancel = AtomicBool::new(false);
-        let sys = FakeSystem { admin, docker };
+        let sys = FakeSystem { elevated, docker };
         scan_all(fs, &sys, &roots(), NOW, &cancel, &mut |c| out.push(c));
         out
     }
@@ -790,7 +790,7 @@ mod tests {
         let cancel = AtomicBool::new(true);
         let mut out = Vec::new();
         let sys = FakeSystem {
-            admin: true,
+            elevated: true,
             docker: true,
         };
         scan_all(&fs, &sys, &roots(), NOW, &cancel, &mut |c| out.push(c));
