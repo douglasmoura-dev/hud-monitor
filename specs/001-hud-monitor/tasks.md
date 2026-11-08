@@ -18,3 +18,4 @@ Cada tarefa vira uma issue com o rótulo `spec-driven`. Critérios em [docs/eval
 | T12 | Scanner de limpeza (somente leitura) e tela do scanner | E12 | T05 |
 | T13 | Mover para a Lixeira com confirmação | E13 | T12 |
 | T14 | Orçamento de memória e CPU + script de medição | E14 | T07, T11, T13 |
+| T15 | Temas visuais (5 temas prontos, troca ao vivo) | E15 | T14 |
