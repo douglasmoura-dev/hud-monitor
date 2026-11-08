@@ -1,4 +1,7 @@
 import { Bar, Field, Theme } from "theme.slint";
+import { MiniBar } from "minibar.slint";
+
+export { MiniBar }
 
 component Label inherits Text {
     color: Theme.dim;
@@ -72,6 +75,7 @@ export component Hud inherits Window {
     callback moved(length, length);
     callback released();
     callback quit();
+    callback minimize();
     in property <float> bg-alpha: 0.88;
     in property <string> clock: "--:--";
     in property <Field> cpu-total;
@@ -146,13 +150,18 @@ export component Hud inherits Window {
                 border-width: 1.5px;
                 border-color: Theme.dim;
             }
-            Rectangle { // expand
-                x: parent.width - 56px;
-                y: 10px;
-                width: 10px;
-                height: 10px;
-                border-width: 1.5px;
-                border-color: Theme.dim;
+            TouchArea { // minimize to the mini bar
+                x: parent.width - 62px;
+                width: 22px;
+                clicked => { root.minimize(); }
+                Rectangle {
+                    x: 6px;
+                    y: 10px;
+                    width: 10px;
+                    height: 10px;
+                    border-width: 1.5px;
+                    border-color: Theme.dim;
+                }
             }
             TouchArea { // close
                 x: parent.width - 32px;

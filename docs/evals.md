@@ -100,3 +100,7 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - Input: `FileDayStore::save` duas vezes na mesma data → Expect: arquivo contém o último valor e nenhum `.tmp` sobra no diretório (escrita atômica por rename).
 - Input: contagem de núcleos físicos indisponível → Expect: rótulo `"—/4T · …"` com tooltip do motivo.
 - Input: build release rodando 30 s em i5-7200U, captura em `docs/screenshots/hud.png` → Expect: HUD 320x400 com fontes Rajdhani/Share Tech Mono, memória privada 14,3 MB (≤ 30 MB).
+
+## E06 — verificações executadas (T06)
+- Executei `target\release\hud-app.exe` com config em `%APPDATA%` temporário (barrinha visível, itens `[Cpu, Ram, Net, Claude5h]`, horizontal) por 30 s: 4 chips nessa ordem em linha, `5H` mostra `—` ("provedor ainda não implementado"); captura em `docs/screenshots/minibar.png`. Memória privada: 13,8 MB (orçamento 30 MB).
+- Botões expandir/fechar na barrinha e minimizar no HUD: cobertos por testes do `.slint` e por `save_minibar_state`; o clique real não foi automatizado.

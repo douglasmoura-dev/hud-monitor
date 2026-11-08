@@ -1,0 +1,90 @@
+import { ChipData, Theme } from "theme.slint";
+
+component Chip inherits Rectangle {
+    in property <ChipData> data;
+    width: 64px;
+    height: 36px;
+    background: Theme.track;
+    border-radius: 4px;
+    Text {
+        y: 3px;
+        width: parent.width;
+        text: root.data.label;
+        color: Theme.dim;
+        font-family: Theme.label-font;
+        font-weight: 600;
+        font-size: 10px;
+        letter-spacing: 1.5px;
+        horizontal-alignment: center;
+    }
+    Text {
+        y: 16px;
+        width: parent.width;
+        text: root.data.field.text;
+        color: root.data.field.tip == "" ? Theme.teal : Theme.dim;
+        font-family: Theme.number-font;
+        font-size: 13px;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+}
+
+export component MiniBar inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    in property <bool> vertical;
+    in property <float> bg-alpha: 0.88;
+    in property <[ChipData]> chips;
+    callback moved(length, length);
+    callback released();
+    callback expand();
+    callback quit();
+
+    Rectangle {
+        background: rgba(10, 14, 20, root.bg-alpha);
+        border-color: Theme.border;
+        border-width: 1px;
+        border-radius: 6px;
+        TouchArea {
+            moved => { root.moved(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
+            pointer-event(e) => { if e.kind == PointerEventKind.up { root.released(); } }
+        }
+        TouchArea { // expand to the HUD
+            x: 6px;
+            y: 6px;
+            width: root.vertical ? 30px : 20px;
+            height: root.vertical ? 20px : 18px;
+            clicked => { root.expand(); }
+            Rectangle {
+                x: (parent.width - 10px) / 2;
+                y: (parent.height - 10px) / 2;
+                width: 10px;
+                height: 10px;
+                border-width: 1.5px;
+                border-color: parent.has-hover ? Theme.teal : Theme.dim;
+            }
+        }
+        TouchArea { // close
+            x: root.vertical ? 36px : 6px;
+            y: root.vertical ? 6px : 24px;
+            width: root.vertical ? 30px : 20px;
+            height: 18px;
+            clicked => { root.quit(); }
+            Path {
+                x: (parent.width - 8px) / 2;
+                y: (parent.height - 8px) / 2;
+                width: 8px;
+                height: 8px;
+                commands: "M 0 0 L 8 8 M 8 0 L 0 8";
+                stroke: parent.has-hover ? Theme.teal : Theme.dim;
+                stroke-width: 1.5px;
+            }
+        }
+        for chip[i] in root.chips: Chip {
+            data: chip;
+            x: root.vertical ? 6px : 30px + i * 68px;
+            y: root.vertical ? 30px + i * 40px : 6px;
+        }
+    }
+}
