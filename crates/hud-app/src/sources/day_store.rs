@@ -58,13 +58,16 @@ mod tests {
         day: 8,
     };
 
-    fn temp_dir() -> PathBuf {
-        std::env::temp_dir().join(format!("hud-monitor-daystore-{}", std::process::id()))
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "hud-monitor-daystore-{}-{name}",
+            std::process::id()
+        ))
     }
 
     #[test]
     fn saves_one_file_per_day_and_loads_it_back() {
-        let dir = temp_dir();
+        let dir = temp_dir("roundtrip");
         let store = FileDayStore::new(dir.clone());
         store.save(D1, 3_100).unwrap();
         store.save(D2, 0).unwrap();
@@ -76,7 +79,7 @@ mod tests {
 
     #[test]
     fn save_replaces_existing_file_and_leaves_no_temp_file() {
-        let dir = temp_dir().join("atomic");
+        let dir = temp_dir("atomic");
         let store = FileDayStore::new(dir.clone());
         store.save(D1, 1).unwrap();
         store.save(D1, 2).unwrap();
@@ -91,7 +94,7 @@ mod tests {
 
     #[test]
     fn save_into_a_file_path_fails_with_error() {
-        let dir = temp_dir().join("save-fails");
+        let dir = temp_dir("save-fails");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("a-file");
         std::fs::write(&file, "x").unwrap();
@@ -102,7 +105,7 @@ mod tests {
 
     #[test]
     fn missing_or_corrupt_file_loads_as_none() {
-        let dir = temp_dir().join("corrupt");
+        let dir = temp_dir("corrupt");
         let store = FileDayStore::new(dir.clone());
         assert_eq!(store.load(D1), None);
         std::fs::create_dir_all(&dir).unwrap();
