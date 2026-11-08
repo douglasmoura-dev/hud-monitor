@@ -1,20 +1,29 @@
 //! The only module allowed to use `unsafe` (Windows FFI).
 
+use hud_core::integration::{Backdrop, IntegrationError, RunKey};
 use hud_core::metrics::{Date, DiskIo};
 use hud_core::position::Size;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::NetworkManagement::IpHelper::{
     IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho, ICMP_ECHO_REPLY,
 };
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW,
     PdhGetFormattedCounterValue, PdhOpenQueryW, PDH_FMT_COUNTERVALUE, PDH_FMT_COUNTERVALUE_ITEM_W,
     PDH_FMT_DOUBLE, PDH_FMT_LARGE, PDH_HCOUNTER, PDH_HQUERY,
 };
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
+    KEY_SET_VALUE, REG_SZ,
+};
 use windows::Win32::System::SystemInformation::GetLocalTime;
-use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, SM_CXSCREEN, SM_CYSCREEN,
+};
 
 const PDH_OK: u32 = 0;
 const PDH_MORE_DATA: u32 = 0x800007D2;
@@ -268,6 +277,140 @@ impl Drop for Icmp {
         unsafe {
             let _ = IcmpCloseHandle(self.0);
         }
+    }
+}
+
+fn hwnd(raw: isize) -> HWND {
+    HWND(raw as *mut std::ffi::c_void)
+}
+
+/// True while either Ctrl key is physically down.
+pub fn ctrl_down() -> bool {
+    // SAFETY: GetAsyncKeyState takes a plain virtual-key code and has no preconditions.
+    unsafe { GetAsyncKeyState(i32::from(VK_CONTROL.0)) < 0 }
+}
+
+/// Extended window style of a live window.
+pub fn ex_style(raw: isize) -> u32 {
+    // SAFETY: reads a style word of a window handle; an invalid handle only yields 0.
+    unsafe { GetWindowLongPtrW(hwnd(raw), GWL_EXSTYLE) as u32 }
+}
+
+/// Replaces the extended window style of a live window.
+pub fn set_ex_style(raw: isize, style: u32) {
+    // SAFETY: writes a style word of a window handle owned by this process; an invalid
+    // handle makes the call fail without side effects.
+    unsafe {
+        SetWindowLongPtrW(hwnd(raw), GWL_EXSTYLE, style as isize);
+    }
+}
+
+#[repr(C)]
+struct AccentPolicy {
+    state: u32,
+    flags: u32,
+    gradient_color: u32,
+    animation_id: u32,
+}
+
+#[repr(C)]
+struct CompositionAttribute {
+    attribute: u32,
+    data: *mut AccentPolicy,
+    size: usize,
+}
+
+type SetCompositionAttribute =
+    unsafe extern "system" fn(HWND, *mut CompositionAttribute) -> windows::core::BOOL;
+
+const WCA_ACCENT_POLICY: u32 = 19;
+const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+
+/// Acrylic backdrop of one window via the undocumented `SetWindowCompositionAttribute`.
+pub struct WindowBackdrop(pub isize);
+
+impl Backdrop for WindowBackdrop {
+    fn enable_acrylic(&mut self, tint_abgr: u32) -> Result<(), IntegrationError> {
+        let fail = |what: &str| IntegrationError(what.to_owned());
+        // SAFETY: the function pointer comes from user32's export of the documented-by-use
+        // `SetWindowCompositionAttribute` with its known signature; the policy and attribute
+        // structs are locals that outlive the call.
+        unsafe {
+            let user32 = GetModuleHandleW(w!("user32.dll")).map_err(|e| fail(&e.to_string()))?;
+            let proc = GetProcAddress(user32, windows::core::s!("SetWindowCompositionAttribute"))
+                .ok_or_else(|| fail("SetWindowCompositionAttribute not found"))?;
+            let set: SetCompositionAttribute = std::mem::transmute(proc);
+            let mut policy = AccentPolicy {
+                state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
+                flags: 0,
+                gradient_color: tint_abgr,
+                animation_id: 0,
+            };
+            let mut data = CompositionAttribute {
+                attribute: WCA_ACCENT_POLICY,
+                data: &mut policy,
+                size: std::mem::size_of::<AccentPolicy>(),
+            };
+            if set(hwnd(self.0), &mut data).as_bool() {
+                Ok(())
+            } else {
+                Err(fail("SetWindowCompositionAttribute failed"))
+            }
+        }
+    }
+}
+
+const RUN_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
+
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+pub struct RegistryRun;
+
+impl RegistryRun {
+    fn open() -> Result<HKEY, IntegrationError> {
+        let mut key = HKEY::default();
+        // SAFETY: the out pointer is a live local; the key is closed by the caller.
+        let status =
+            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_SET_VALUE, &mut key) };
+        status
+            .ok()
+            .map(|()| key)
+            .map_err(|e| IntegrationError(e.to_string()))
+    }
+}
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
+
+impl RunKey for RegistryRun {
+    fn set(&mut self, name: &str, command: &str) -> Result<(), IntegrationError> {
+        let key = Self::open()?;
+        let (name, data) = (wide(name), wide(command));
+        // SAFETY: `name` is NUL-terminated; the data slice is the UTF-16 bytes including the
+        // terminator as REG_SZ requires; both outlive the call; the key is open and closed here.
+        let status = unsafe {
+            let bytes = std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), data.len() * 2);
+            let status = RegSetValueExW(key, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes));
+            let _ = RegCloseKey(key);
+            status
+        };
+        status.ok().map_err(|e| IntegrationError(e.to_string()))
+    }
+
+    fn remove(&mut self, name: &str) -> Result<(), IntegrationError> {
+        const NOT_FOUND: u32 = 2;
+        let key = Self::open()?;
+        let name = wide(name);
+        // SAFETY: `name` is NUL-terminated and outlives the call; the key is open and closed here.
+        let status = unsafe {
+            let status = RegDeleteValueW(key, PCWSTR(name.as_ptr()));
+            let _ = RegCloseKey(key);
+            status
+        };
+        if status.0 == NOT_FOUND {
+            return Ok(());
+        }
+        status.ok().map_err(|e| IntegrationError(e.to_string()))
     }
 }
 
