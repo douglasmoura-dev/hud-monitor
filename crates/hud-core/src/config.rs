@@ -8,7 +8,7 @@ use std::{fs, io, path::Path};
 /// Single source of truth for the HUD window size (the Slint literal in hud-app must match).
 pub const HUD_SIZE: Size = Size {
     width: 320,
-    height: 400,
+    height: 500,
 };
 
 const DEFAULT_OPACITY: f32 = 0.88;
@@ -27,6 +27,10 @@ const DEFAULT_TEMP: Threshold = Threshold {
 const DEFAULT_PING: Threshold = Threshold {
     warn: 80.0,
     crit: 200.0,
+};
+const DEFAULT_CLAUDE_5H: Threshold = Threshold {
+    warn: 70.0,
+    crit: 90.0,
 };
 const DEFAULT_TOGGLE_HUD: &str = "Ctrl+Alt+H";
 const DEFAULT_TOGGLE_MINIBAR: &str = "Ctrl+Alt+M";
@@ -93,6 +97,12 @@ pub struct Thresholds {
     pub ram_percent: Threshold,
     pub temp_c: Threshold,
     pub ping_ms: Threshold,
+    #[serde(default = "default_claude_5h")]
+    pub claude_5h: Threshold,
+}
+
+fn default_claude_5h() -> Threshold {
+    DEFAULT_CLAUDE_5H
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -209,6 +219,7 @@ impl Config {
                 ram_percent: DEFAULT_RAM,
                 temp_c: DEFAULT_TEMP,
                 ping_ms: DEFAULT_PING,
+                claude_5h: DEFAULT_CLAUDE_5H,
             },
             hotkeys: Hotkeys {
                 toggle_hud: DEFAULT_TOGGLE_HUD.to_owned(),
@@ -228,6 +239,7 @@ impl Config {
         check_threshold(self.thresholds.ram_percent, "thresholds.ram_percent")?;
         check_threshold(self.thresholds.temp_c, "thresholds.temp_c")?;
         check_threshold(self.thresholds.ping_ms, "thresholds.ping_ms")?;
+        check_threshold(self.thresholds.claude_5h, "thresholds.claude_5h")?;
         if !is_hotkey(&self.hotkeys.toggle_hud) {
             return Err(invalid("hotkeys.toggle_hud"));
         }
@@ -586,5 +598,39 @@ mod appearance_tests {
             .map(|l| format!("{l}\n"))
             .collect();
         assert_eq!(Config::from_toml(&old).unwrap(), c);
+    }
+
+    #[test]
+    fn config_saved_before_claude_threshold_gets_warn_70_crit_90() {
+        let c = Config::first_run(SCREEN);
+        let old: String = c
+            .to_toml()
+            .unwrap()
+            .lines()
+            .scan(false, |skip, l| {
+                if l.starts_with("[thresholds.claude_5h]") {
+                    *skip = true;
+                } else if l.starts_with('[') {
+                    *skip = false;
+                }
+                Some((*skip, l))
+            })
+            .filter(|(skip, _)| !skip)
+            .map(|(_, l)| {
+                format!(
+                    "{l}
+"
+                )
+            })
+            .collect();
+        assert!(!old.contains("claude_5h"));
+        let loaded = Config::from_toml(&old).unwrap();
+        assert_eq!(
+            loaded.thresholds.claude_5h,
+            Threshold {
+                warn: 70.0,
+                crit: 90.0
+            }
+        );
     }
 }

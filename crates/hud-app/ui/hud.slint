@@ -1,4 +1,4 @@
-import { Bar, Field, Theme } from "theme.slint";
+import { Bar, Field, Limit, Theme } from "theme.slint";
 import { MiniBar } from "minibar.slint";
 
 export { MiniBar }
@@ -56,6 +56,37 @@ component Arrow inherits Path {
     commands: root.down ? "M 0 0 L 8 0 L 4 7 Z" : "M 0 7 L 8 7 L 4 0 Z";
 }
 
+component LimitRow inherits Rectangle {
+    in property <string> name;
+    in property <Limit> limit;
+    in property <color> tint;
+    callback tip(string);
+    height: 18px;
+    Text {
+        x: 0px;
+        width: 52px;
+        text: root.name;
+        color: Theme.dim;
+        font-family: Theme.label-font;
+        font-weight: 600;
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        vertical-alignment: center;
+    }
+    Meter { x: 56px; y: 6px; width: 100px; percent: root.limit.percent; tint: root.tint; }
+    Val { x: 164px; y: 1px; size: 12px; field: root.limit.pct; tip(s) => { root.tip(s); } }
+    Text {
+        x: parent.width - self.width;
+        width: 48px;
+        text: root.limit.reset;
+        color: Theme.dim;
+        font-family: Theme.number-font;
+        font-size: 11px;
+        vertical-alignment: center;
+        horizontal-alignment: right;
+    }
+}
+
 component GpuCell inherits Rectangle {
     in property <string> name;
     in property <Field> field;
@@ -71,7 +102,7 @@ export component Hud inherits Window {
     always-on-top: true;
     background: transparent;
     width: 320px;
-    height: 400px;
+    height: 500px;
     callback moved(length, length);
     callback released();
     callback quit();
@@ -99,6 +130,9 @@ export component Hud inherits Window {
     in property <Field> net-up;
     in property <Field> net-today;
     in property <Field> ping;
+    in property <string> claude-plan;
+    in property <Limit> claude-5h;
+    in property <Limit> claude-7d;
     property <string> hover-tip;
 
     Rectangle {
@@ -237,6 +271,43 @@ export component Hud inherits Window {
         Val { x: 174px; y: 340px; tint: Theme.blue; field: root.net-up; tip(s) => { root.hover-tip = s; } }
         Val { x: 12px; y: 362px; size: 11px; tint: Theme.dim; field: root.net-today; tip(s) => { root.hover-tip = s; } }
         Val { x: 160px; y: 362px; size: 11px; tint: Theme.dim; field: root.ping; tip(s) => { root.hover-tip = s; } }
+
+        Rule { x: 12px; y: 384px; width: parent.width - 24px; }
+
+        // LIMITES IA
+        Label { x: 12px; y: 390px; text: "LIMITES IA"; }
+        Text {
+            x: 12px;
+            y: 408px;
+            text: "CLAUDE";
+            color: Theme.text;
+            font-family: Theme.label-font;
+            font-weight: 600;
+            font-size: 13px;
+            letter-spacing: 1px;
+        }
+        Rectangle {
+            visible: root.claude-plan != "";
+            x: 70px;
+            y: 409px;
+            width: badge.preferred-width + 10px;
+            height: 15px;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: Theme.teal;
+            badge := Text {
+                x: 5px;
+                text: root.claude-plan;
+                color: Theme.teal;
+                font-family: Theme.label-font;
+                font-weight: 600;
+                font-size: 10px;
+                letter-spacing: 1px;
+                vertical-alignment: center;
+            }
+        }
+        LimitRow { x: 12px; y: 430px; width: parent.width - 24px; name: "5H"; limit: root.claude-5h; tint: Theme.teal; tip(s) => { root.hover-tip = s; } }
+        LimitRow { x: 12px; y: 452px; width: parent.width - 24px; name: "SEMANA"; limit: root.claude-7d; tint: Theme.blue; tip(s) => { root.hover-tip = s; } }
 
         // Reason for an unavailable value, shown while it is hovered.
         Rectangle {

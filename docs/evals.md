@@ -114,3 +114,8 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 ## Verificações T08 (issue #9)
 - `cargo test`: `alerts::tests` cobre 72 → Warn, 91 → Crit, temperatura `Unavailable` → sem alerta, limiar por métrica, snapshot degradado sem alerta; `config::tests` cobre Crit com HUD e barrinha escondidos → barrinha visível; `view::tests` cobre cores âmbar `#EF9F27`/vermelho `#E24B4A` no HUD e nos chips.
 - `target\release\hud-app.exe` iniciou e rodou 6 s sem falhar (cor sob alerta real não foi forçada na tela).
+
+## Verificações T09 (issue #10)
+- `cargo test`: `ai::tests` cobre a fixture `claude_usage_ok.json` (72% / `1h48`, 41% / `2d`), etiquetas `PRO`/`MAX`, 401 → estimativa por logs locais com "abra o Claude Code para renovar o login", sem tokens → `~0%`, e que o token fake não aparece em nenhuma saída `Debug`/`Display`; `sources::claude::tests` percorre `.jsonl` reais em pasta temporária (só arquivos dos últimos 7 dias) e confere que o hash do arquivo de credenciais é igual antes e depois.
+- `target\release\hud-app.exe` na máquina real (`%APPDATA%` temporário, `USERPROFILE` real): o endpoint voltou 401 (`expiresAt = 0`), então o HUD mostrou a etiqueta `PRO` e o plano B: `5H ~5.3M tok` e `SEMANA ~28.8M tok`, sem percentual nem reset (limite por plano não é público). stderr vazio, hash do `.credentials.json` idêntico, memória privada 15,2 MB; captura em `docs/screenshots/hud-ai.png`.
+- Plano B mostra contagem de tokens em vez de percentual inventado; `~0%` só quando a contagem é zero. Alerta `claude_5h` (70/90) só dispara com leitura oficial. O caminho oficial (200) só foi exercitado com fixture e fakes, não contra a API real.
