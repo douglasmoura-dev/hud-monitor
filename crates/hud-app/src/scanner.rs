@@ -20,6 +20,7 @@ use std::{
 };
 
 const POLL: Duration = Duration::from_millis(200);
+const WORKER_LOST: &str = "a limpeza parou de forma inesperada; confira a Lixeira";
 const CLOCK_UNAVAILABLE: &str = "relógio do sistema indisponível";
 
 enum ScanEvent {
@@ -249,6 +250,12 @@ impl State {
                     finished = true;
                 }
             }
+        }
+        if ended && !finished {
+            self.phase = Phase::Done {
+                headline: WORKER_LOST.to_owned(),
+                lines: Vec::new(),
+            };
         }
         if finished || ended {
             self.removal = None;
@@ -684,5 +691,22 @@ mod tests {
         state.release();
         assert!(cancel.load(Ordering::Relaxed));
         assert_eq!(state.phase, Phase::List);
+    }
+
+    #[test]
+    fn a_worker_that_vanishes_does_not_leave_the_window_running() {
+        let (tx, events) = mpsc::channel::<RemovalEvent>();
+        let mut state = State {
+            removal: Some(RemovalRun {
+                events,
+                cancel: Arc::new(AtomicBool::new(false)),
+            }),
+            phase: Phase::Running { done: 1, total: 4 },
+            ..State::default()
+        };
+        drop(tx);
+        state.absorb();
+        assert_eq!(state.phase.headline(), WORKER_LOST);
+        assert!(state.removal.is_none());
     }
 }

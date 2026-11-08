@@ -129,21 +129,17 @@ impl Recycler for ShellRecycler {
             .filter(|(_, ok)| ok.is_ok())
             .map(|(p, _)| p.clone())
             .collect();
-        let call = if queued.is_empty() {
-            Ok(())
-        } else {
-            winffi::recycle_paths(&queued)
-        };
+        if !queued.is_empty() {
+            // A batch-level error says nothing about which item failed; the disk state decides.
+            let _ = winffi::recycle_paths(&queued);
+        }
         paths
             .iter()
             .zip(checked)
             .map(|(path, check)| {
                 check?;
                 if still_there(path) {
-                    Err(call
-                        .clone()
-                        .err()
-                        .unwrap_or_else(|| STUCK_REASON.to_owned()))
+                    Err(STUCK_REASON.to_owned())
                 } else {
                     Ok(())
                 }
