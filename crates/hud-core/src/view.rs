@@ -1,6 +1,7 @@
 //! Display text for the HUD, built from a `Snapshot`. Unavailable metrics become `—` plus the reason.
 
-use crate::config::{MiniBarItem, Orientation};
+use crate::alerts::{evaluate, Level};
+use crate::config::{MiniBarItem, Orientation, Thresholds};
 use crate::format::{rate, size, used_total_gb};
 use crate::metrics::{CpuMetrics, Metric, Snapshot};
 use crate::position::Size;
@@ -8,6 +9,8 @@ use crate::position::Size;
 pub const DASH: &str = "—";
 pub const BAR_RED: u32 = 0x00E2_4B4A;
 pub const BAR_GREEN: u32 = 0x001D_9E75;
+pub const ALERT_WARN: u32 = 0x00EF_9F27;
+pub const ALERT_CRIT: u32 = BAR_RED;
 const HOT_THREAD_PERCENT: f32 = 80.0;
 const NO_PROCESSES: &str = "processos indisponíveis";
 
@@ -16,6 +19,7 @@ const NO_PROCESSES: &str = "processos indisponíveis";
 pub struct Field {
     pub text: String,
     pub tip: String,
+    pub level: Level,
 }
 
 impl Field {
@@ -23,6 +27,7 @@ impl Field {
         Self {
             text,
             tip: String::new(),
+            level: Level::Ok,
         }
     }
 
@@ -30,6 +35,7 @@ impl Field {
         Self {
             text: DASH.to_string(),
             tip: reason.to_string(),
+            level: Level::Ok,
         }
     }
 
@@ -78,6 +84,26 @@ pub fn bar_color(percent: f32) -> u32 {
     }
 }
 
+/// Display colour of an alert level, `None` when there is nothing to flag.
+pub fn level_color(level: Level) -> Option<u32> {
+    match level {
+        Level::Ok => None,
+        Level::Warn => Some(ALERT_WARN),
+        Level::Crit => Some(ALERT_CRIT),
+    }
+}
+
+/// `build` plus alert levels on the fields that have thresholds.
+pub fn build_alerted(s: &Snapshot, t: &Thresholds) -> HudView {
+    let mut v = build(s);
+    let a = evaluate(s, t);
+    v.cpu_total.level = a.cpu;
+    v.ram.level = a.ram;
+    v.cpu_temp.level = a.temp;
+    v.ping.level = a.ping;
+    v
+}
+
 fn core_label(cpu: &CpuMetrics) -> Field {
     let threads = cpu.threads.len();
     let above = match cpu.above_50 {
@@ -89,6 +115,7 @@ fn core_label(cpu: &CpuMetrics) -> Field {
         Metric::Unavailable(reason) => Field {
             text: format!("{DASH}/{threads}T · {above}"),
             tip: reason.clone(),
+            level: Level::Ok,
         },
     }
 }
@@ -213,27 +240,30 @@ fn chip_label(item: MiniBarItem) -> &'static str {
 fn chip_value(item: MiniBarItem, v: &HudView) -> Field {
     match item {
         MiniBarItem::Cpu => v.cpu_total.clone(),
-        MiniBarItem::Ram => percent_field(&v.ram, v.ram_percent),
+        MiniBarItem::Ram => percent_field(&v.ram, v.ram_percent, v.ram.level),
         MiniBarItem::Net => v.net_down.clone(),
         MiniBarItem::Temp => v.cpu_temp.clone(),
         MiniBarItem::Ping => v.ping.clone(),
         MiniBarItem::Gpu => v.gpu_nvidia.clone(),
-        MiniBarItem::Disk => percent_field(&v.disk, v.disk_percent),
+        MiniBarItem::Disk => percent_field(&v.disk, v.disk_percent, Level::Ok),
         MiniBarItem::Claude5h | MiniBarItem::Claude7d => Field::missing(NOT_IMPLEMENTED),
     }
 }
 
-fn percent_field(source: &Field, percent: f32) -> Field {
+fn percent_field(source: &Field, percent: f32, level: Level) -> Field {
     if source.tip.is_empty() {
-        Field::ok(format!("{percent:.0}%"))
+        Field {
+            level,
+            ..Field::ok(format!("{percent:.0}%"))
+        }
     } else {
         source.clone()
     }
 }
 
 /// Chips in the configured order, built from the same view as the HUD.
-pub fn minibar_chips(items: &[MiniBarItem], s: &Snapshot) -> Vec<Chip> {
-    let v = build(s);
+pub fn minibar_chips(items: &[MiniBarItem], s: &Snapshot, t: &Thresholds) -> Vec<Chip> {
+    let v = build_alerted(s, t);
     items
         .iter()
         .map(|&item| Chip {
@@ -246,7 +276,7 @@ pub fn minibar_chips(items: &[MiniBarItem], s: &Snapshot) -> Vec<Chip> {
 /// One-line tray tooltip: CPU, RAM and temperature, `—` where unavailable.
 pub fn tray_tooltip(s: &Snapshot) -> String {
     let v = build(s);
-    let ram = percent_field(&v.ram, v.ram_percent);
+    let ram = percent_field(&v.ram, v.ram_percent, Level::Ok);
     format!(
         "CPU {} · RAM {} · {}",
         v.cpu_total.text, ram.text, v.cpu_temp.text
@@ -273,6 +303,7 @@ pub fn minibar_size(count: usize, orientation: Orientation) -> Size {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use crate::format::GIB;
     use crate::metrics::{DiskMetrics, MemMetrics, NetMetrics, ProcessMem};
     use crate::sensors::Sensors;
@@ -311,6 +342,31 @@ mod tests {
             gpu: sensors.gpu,
             unavailable: None,
         }
+    }
+
+    fn thresholds() -> Thresholds {
+        Config::first_run(Size {
+            width: 1920,
+            height: 1080,
+        })
+        .thresholds
+    }
+
+    #[test]
+    fn alerts_colour_hud_values_and_chips_but_not_unavailable_ones() {
+        let mut s = snapshot(vec![10.0]);
+        s.cpu.total = 95.0;
+        s.mem.percent = 80;
+        let v = build_alerted(&s, &thresholds());
+        assert_eq!(v.cpu_total.level, Level::Crit);
+        assert_eq!(v.ram.level, Level::Warn);
+        assert_eq!(v.cpu_temp.level, Level::Ok);
+        let chips = minibar_chips(&[MiniBarItem::Cpu, MiniBarItem::Ram], &s, &thresholds());
+        assert_eq!(chips[0].value.level, Level::Crit);
+        assert_eq!(chips[1].value.level, Level::Warn);
+        assert_eq!(level_color(Level::Warn), Some(0xEF9F27));
+        assert_eq!(level_color(Level::Crit), Some(0xE24B4A));
+        assert_eq!(level_color(Level::Ok), None);
     }
 
     #[test]
@@ -386,7 +442,11 @@ mod tests {
     #[test]
     fn chips_follow_configured_order_and_unimplemented_provider_is_dash() {
         use MiniBarItem::*;
-        let chips = minibar_chips(&[Cpu, Ram, Net, Claude5h], &snapshot(vec![10.0]));
+        let chips = minibar_chips(
+            &[Cpu, Ram, Net, Claude5h],
+            &snapshot(vec![10.0]),
+            &thresholds(),
+        );
         let labels: Vec<_> = chips.iter().map(|c| c.label).collect();
         assert_eq!(labels, ["CPU", "RAM", "NET", "5H"]);
         assert_eq!(chips[0].value.text, "62%");
@@ -399,7 +459,11 @@ mod tests {
     #[test]
     fn unavailable_source_gives_dash_chip_with_reason() {
         use MiniBarItem::*;
-        let chips = minibar_chips(&[Temp, Ram], &Snapshot::unavailable("coleta falhou"));
+        let chips = minibar_chips(
+            &[Temp, Ram],
+            &Snapshot::unavailable("coleta falhou"),
+            &thresholds(),
+        );
         assert!(chips.iter().all(|c| c.value.text == "—"));
         assert_eq!(chips[1].value.tip, "coleta falhou");
     }

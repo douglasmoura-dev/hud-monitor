@@ -273,6 +273,15 @@ impl Config {
         }
     }
 
+    /// Alert escalation: when both windows are hidden, shows the mini bar. Returns whether it changed.
+    pub fn reveal_minibar_if_hidden(&mut self) -> bool {
+        let both_hidden = !self.hud.visible && !self.minibar.window.visible;
+        if both_hidden {
+            self.minibar.window.visible = true;
+        }
+        both_hidden
+    }
+
     /// Applies the named profile's mini bar items and orientation.
     pub fn switch_profile(&mut self, name: &str) -> Result<(), ConfigError> {
         let profile = self
@@ -530,6 +539,30 @@ mod appearance_tests {
         c.toggle_minibar();
         assert!(c.minibar.window.visible && !c.hud.visible);
         c.toggle_hud();
+        assert!(c.hud.visible && !c.minibar.window.visible);
+    }
+
+    #[test]
+    fn crit_with_both_windows_hidden_shows_the_minibar() {
+        let mut c = Config::first_run(Size {
+            width: 1920,
+            height: 1080,
+        });
+        c.hud.visible = false;
+        c.minibar.window.visible = false;
+        assert!(c.reveal_minibar_if_hidden());
+        assert!(c.minibar.window.visible && !c.hud.visible);
+        assert!(!c.reveal_minibar_if_hidden());
+    }
+
+    #[test]
+    fn crit_leaves_a_visible_hud_alone() {
+        let mut c = Config::first_run(Size {
+            width: 1920,
+            height: 1080,
+        });
+        c.hud.visible = true;
+        assert!(!c.reveal_minibar_if_hidden());
         assert!(c.hud.visible && !c.minibar.window.visible);
     }
 

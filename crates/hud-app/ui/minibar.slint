@@ -21,7 +21,7 @@ component Chip inherits Rectangle {
         y: 16px;
         width: parent.width;
         text: root.data.field.text;
-        color: root.data.field.tip == "" ? Theme.teal : Theme.dim;
+        color: root.data.field.tip == "" ? Theme.tone(root.data.field.level, Theme.teal) : Theme.dim;
         font-family: Theme.number-font;
         font-size: 13px;
         horizontal-alignment: center;
