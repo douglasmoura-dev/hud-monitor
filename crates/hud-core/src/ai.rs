@@ -9,6 +9,8 @@ use crate::view::ClaudeState;
 use serde::Deserialize;
 use std::fmt;
 
+pub const CODEX_NOT_FOUND: &str = "Codex não encontrado";
+pub const CODEX_RENEW_LOGIN_TIP: &str = "abra o Codex para renovar o login";
 const NOT_FOUND: &str = "Claude Code não encontrado";
 pub const RENEW_LOGIN_TIP: &str = "abra o Claude Code para renovar o login";
 const FIVE_HOURS: i64 = 5 * 3600;
@@ -23,6 +25,9 @@ pub enum AiError {
     Response(String),
     #[error("logs locais ilegíveis: {0}")]
     Logs(String),
+    /// Reason shown as `—` when a provider has no usable data and no local fallback.
+    #[error("{0}")]
+    Api(String),
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
@@ -355,6 +360,129 @@ pub fn claude_state(provider: &impl AiProvider, now: i64) -> ClaudeState {
     }
 }
 
+// ---------- Codex ----------
+
+#[derive(Deserialize)]
+struct RawCodexWindow {
+    used_percent: f32,
+    reset_after_seconds: i64,
+}
+
+#[derive(Deserialize)]
+struct RawCodexLimits {
+    primary_window: Option<RawCodexWindow>,
+    secondary_window: Option<RawCodexWindow>,
+}
+
+#[derive(Deserialize)]
+struct RawCodexUsage {
+    rate_limit: Option<RawCodexLimits>,
+}
+
+fn codex_reading(w: Option<RawCodexWindow>, name: &str, now: i64) -> Result<Reading, AiError> {
+    let w = w.ok_or_else(|| AiError::Response(format!("janela {name} ausente")))?;
+    Ok(Reading::Official {
+        percent: w.used_percent,
+        resets_at: now + w.reset_after_seconds,
+    })
+}
+
+/// Parses the `GET /backend-api/wham/usage` body (the one the Codex CLI reads) into
+/// `(primary 5 h, secondary weekly)`. Resets are relative to `now`.
+pub fn parse_codex_usage(body: &str, now: i64) -> Result<(Reading, Reading), AiError> {
+    let raw: RawCodexUsage =
+        serde_json::from_str(body).map_err(|e| AiError::Response(e.to_string()))?;
+    let limits = raw
+        .rate_limit
+        .ok_or_else(|| AiError::Response("sem janelas de limite".to_owned()))?;
+    Ok((
+        codex_reading(limits.primary_window, "primária", now)?,
+        codex_reading(limits.secondary_window, "secundária", now)?,
+    ))
+}
+
+#[derive(Deserialize)]
+struct RawCodexAuth {
+    tokens: RawCodexTokens,
+}
+
+#[derive(Deserialize)]
+struct RawCodexTokens {
+    access_token: String,
+    account_id: String,
+}
+
+pub struct CodexCredentials {
+    pub token: Secret,
+    pub account_id: String,
+}
+
+impl fmt::Debug for CodexCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CodexCredentials")
+            .field("token", &self.token)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Reads only `access_token` and `account_id`; refresh and id tokens are never kept.
+pub fn parse_codex_credentials(text: &str) -> Result<CodexCredentials, AiError> {
+    let raw: RawCodexAuth =
+        serde_json::from_str(text).map_err(|e| AiError::Credentials(e.to_string()))?;
+    Ok(CodexCredentials {
+        token: Secret::new(raw.tokens.access_token),
+        account_id: raw.tokens.account_id,
+    })
+}
+
+pub trait CodexUsageApi {
+    /// Response body of the usage endpoint; a read that spends no quota.
+    fn get(&self, token: &Secret, account_id: &str) -> Result<String, ApiError>;
+}
+
+pub struct CodexProvider<C, A> {
+    pub credentials: C,
+    pub api: A,
+}
+
+impl<C: CredentialsSource, A: CodexUsageApi> AiProvider for CodexProvider<C, A> {
+    fn detect(&self) -> bool {
+        matches!(self.credentials.read(), Ok(Some(_)))
+    }
+
+    fn fetch(&self, now: i64) -> Result<ProviderStatus, AiError> {
+        let text = self
+            .credentials
+            .read()?
+            .ok_or_else(|| AiError::Credentials(CODEX_NOT_FOUND.to_owned()))?;
+        let creds = parse_codex_credentials(&text)?;
+        match self.api.get(&creds.token, &creds.account_id) {
+            Ok(body) => {
+                let (five_hour, seven_day) = parse_codex_usage(&body, now)?;
+                Ok(ProviderStatus {
+                    plan: None,
+                    five_hour,
+                    seven_day,
+                    tip: String::new(),
+                })
+            }
+            Err(ApiError::Unauthorized) => Err(AiError::Api(CODEX_RENEW_LOGIN_TIP.to_owned())),
+            Err(ApiError::Other(reason)) => Err(AiError::Api(reason)),
+        }
+    }
+}
+
+/// Runs one Codex poll. No `auth.json` means `CODEX_NOT_FOUND`, which the HUD does not list.
+pub fn codex_state(provider: &impl AiProvider, now: i64) -> ClaudeState {
+    if !provider.detect() {
+        return Metric::unavailable(CODEX_NOT_FOUND);
+    }
+    match provider.fetch(now) {
+        Ok(status) => Metric::Available(status),
+        Err(e) => Metric::Unavailable(e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +493,104 @@ mod tests {
     const SESSION: &str = include_str!("../tests/fixtures/claude_session.jsonl");
     const FAKE_TOKEN: &str = "fake-token-for-tests-0000";
     const NOW: i64 = 1_794_066_960; // 2026-11-07T15:56:00Z
+
+    const CODEX_USAGE: &str = include_str!("../tests/fixtures/codex_usage_ok.json");
+    const CODEX_AUTH: &str = include_str!("../tests/fixtures/codex_auth.json");
+    const CODEX_TOKEN: &str = "fake-codex-token-0000";
+
+    struct CodexApi(Result<String, ApiError>);
+    impl CodexUsageApi for CodexApi {
+        fn get(&self, _: &Secret, account_id: &str) -> Result<String, ApiError> {
+            assert_eq!(account_id, "acct-fake-1");
+            self.0.clone()
+        }
+    }
+
+    fn codex(
+        auth: Option<&'static str>,
+        api: Result<String, ApiError>,
+    ) -> CodexProvider<Creds, CodexApi> {
+        CodexProvider {
+            credentials: Creds(auth),
+            api: CodexApi(api),
+        }
+    }
+
+    #[test]
+    fn codex_fixture_gives_23_percent_3h10_and_58_percent_5d() {
+        let (five, seven) = parse_codex_usage(CODEX_USAGE, NOW).unwrap();
+        let Reading::Official { percent, resets_at } = five else {
+            panic!("not official");
+        };
+        assert_eq!(
+            (percent, format_reset_in(resets_at, NOW).as_str()),
+            (23.0, "3h10")
+        );
+        let Reading::Official { percent, resets_at } = seven else {
+            panic!("not official");
+        };
+        assert_eq!(
+            (percent, format_reset_in(resets_at, NOW).as_str()),
+            (58.0, "5d")
+        );
+    }
+
+    #[test]
+    fn codex_without_windows_is_an_error_not_a_guess() {
+        assert!(parse_codex_usage("{}", NOW).is_err());
+        assert!(parse_codex_usage(r#"{"rate_limit":null}"#, NOW).is_err());
+        let one = r#"{"rate_limit":{"primary_window":{"used_percent":1,"reset_after_seconds":1}}}"#;
+        assert!(matches!(
+            parse_codex_usage(one, NOW),
+            Err(AiError::Response(_))
+        ));
+    }
+
+    #[test]
+    fn codex_without_auth_json_is_not_listed() {
+        let p = codex(None, Ok(CODEX_USAGE.to_owned()));
+        assert!(!p.detect());
+        assert_eq!(
+            codex_state(&p, NOW),
+            Metric::unavailable("Codex não encontrado")
+        );
+    }
+
+    #[test]
+    fn codex_401_is_unavailable_with_renew_tip() {
+        let p = codex(Some(CODEX_AUTH), Err(ApiError::Unauthorized));
+        assert_eq!(
+            codex_state(&p, NOW),
+            Metric::unavailable("abra o Codex para renovar o login")
+        );
+    }
+
+    #[test]
+    fn codex_official_response_is_available() {
+        let p = codex(Some(CODEX_AUTH), Ok(CODEX_USAGE.to_owned()));
+        let s = codex_state(&p, NOW);
+        assert!(matches!(
+            s.available().map(|s| &s.five_hour),
+            Some(Reading::Official { percent, .. }) if *percent == 23.0
+        ));
+    }
+
+    #[test]
+    fn codex_token_never_appears_in_any_output() {
+        let failing = codex(Some(CODEX_AUTH), Err(ApiError::Other("x".into())));
+        let expired = codex(Some(CODEX_AUTH), Err(ApiError::Unauthorized));
+        let outputs = [
+            format!("{:?}", parse_codex_credentials(CODEX_AUTH)),
+            format!("{:?}", parse_codex_credentials("{\"tokens\":")),
+            format!("{:?}", codex_state(&failing, NOW)),
+            format!("{:?}", expired.fetch(NOW)),
+        ];
+        assert!(outputs.iter().all(|o| !o.contains(CODEX_TOKEN)));
+        assert_eq!(
+            parse_codex_credentials(CODEX_AUTH).unwrap().token.expose(),
+            CODEX_TOKEN
+        );
+    }
 
     struct Creds(Option<&'static str>);
     impl CredentialsSource for Creds {

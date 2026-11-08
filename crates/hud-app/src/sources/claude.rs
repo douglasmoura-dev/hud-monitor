@@ -1,7 +1,7 @@
 //! Real Claude sources: the credentials file (read-only), the usage endpoint and the transcript scan.
 
 use hud_core::ai::{
-    log_cutoff, tally_line, AiError, ApiError, CredentialsSource, Secret, TokenSums,
+    log_cutoff, tally_line, AiError, ApiError, CodexUsageApi, CredentialsSource, Secret, TokenSums,
     TranscriptScanner, UsageApi,
 };
 use std::{
@@ -13,6 +13,7 @@ use std::{
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const BETA_HEADER: &str = "oauth-2025-04-20";
+const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_BODY: u64 = 64 * 1024;
 
@@ -27,6 +28,10 @@ impl FileCredentials {
 
     pub fn default_path(home: &Path) -> PathBuf {
         home.join(".claude").join(".credentials.json")
+    }
+
+    pub fn codex_path(home: &Path) -> PathBuf {
+        home.join(".codex").join("auth.json")
     }
 }
 
@@ -46,7 +51,7 @@ pub struct UreqApi {
 
 impl UreqApi {
     pub fn new() -> Self {
-        // No redirects: the token must only ever reach api.anthropic.com.
+        // No redirects: each token must only ever reach its own provider domain.
         let agent = ureq::AgentBuilder::new()
             .timeout(HTTP_TIMEOUT)
             .redirects(0)
@@ -57,20 +62,38 @@ impl UreqApi {
 
 impl UsageApi for UreqApi {
     fn get(&self, token: &Secret) -> Result<String, ApiError> {
-        let response = self
+        let request = self
             .agent
             .get(USAGE_URL)
             .set("Authorization", &format!("Bearer {}", token.expose()))
-            .set("anthropic-beta", BETA_HEADER)
-            .call();
-        match response {
-            Ok(r) if r.status() == 200 => read_body(r),
-            Ok(r) => Err(ApiError::Other(format!("HTTP {}", r.status()))),
-            Err(ureq::Error::Status(401 | 403, _)) => Err(ApiError::Unauthorized),
-            Err(ureq::Error::Status(code, _)) => Err(ApiError::Other(format!("HTTP {code}"))),
-            Err(ureq::Error::Transport(_)) => {
-                Err(ApiError::Other("sem conexão com a Anthropic".to_owned()))
-            }
+            .set("anthropic-beta", BETA_HEADER);
+        read_response(request.call(), "a Anthropic")
+    }
+}
+
+impl CodexUsageApi for UreqApi {
+    /// Same read-only GET the Codex CLI makes for its limits; it never consumes quota.
+    fn get(&self, token: &Secret, account_id: &str) -> Result<String, ApiError> {
+        let request = self
+            .agent
+            .get(CODEX_USAGE_URL)
+            .set("Authorization", &format!("Bearer {}", token.expose()))
+            .set("chatgpt-account-id", account_id);
+        read_response(request.call(), "o ChatGPT")
+    }
+}
+
+fn read_response(
+    response: Result<ureq::Response, ureq::Error>,
+    provider: &str,
+) -> Result<String, ApiError> {
+    match response {
+        Ok(r) if r.status() == 200 => read_body(r),
+        Ok(r) => Err(ApiError::Other(format!("HTTP {}", r.status()))),
+        Err(ureq::Error::Status(401 | 403, _)) => Err(ApiError::Unauthorized),
+        Err(ureq::Error::Status(code, _)) => Err(ApiError::Other(format!("HTTP {code}"))),
+        Err(ureq::Error::Transport(_)) => {
+            Err(ApiError::Other(format!("sem conexão com {provider}")))
         }
     }
 }
@@ -168,6 +191,7 @@ mod tests {
     const FAKE_TOKEN: &str = "fake-token-for-tests-0000";
     const CREDS: &str =
         include_str!("../../../hud-core/tests/fixtures/claude_credentials_pro.json");
+    const CODEX_AUTH: &str = include_str!("../../../hud-core/tests/fixtures/codex_auth.json");
     const SESSION: &str = include_str!("../../../hud-core/tests/fixtures/claude_session.jsonl");
 
     struct Unauthorized;
@@ -242,6 +266,51 @@ mod tests {
         assert!(!format!("{status:?}").contains(FAKE_TOKEN));
         assert_eq!(hash(&creds), before);
         assert_eq!(fs::read_to_string(&creds).unwrap(), CREDS);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    struct CodexUnauthorized;
+    impl CodexUsageApi for CodexUnauthorized {
+        fn get(&self, _: &Secret, _: &str) -> Result<String, ApiError> {
+            Err(ApiError::Unauthorized)
+        }
+    }
+
+    #[test]
+    fn codex_401_shows_renew_tip_logs_no_token_and_leaves_auth_file_untouched() {
+        use hud_core::ai::{codex_state, CodexProvider};
+        let dir = scratch("codex");
+        let auth = FileCredentials::codex_path(&dir);
+        fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        fs::write(&auth, CODEX_AUTH).unwrap();
+        let before = hash(&auth);
+        let provider = CodexProvider {
+            credentials: FileCredentials::new(auth.clone()),
+            api: CodexUnauthorized,
+        };
+        let state = codex_state(&provider, NOW);
+        assert_eq!(
+            state,
+            hud_core::metrics::Metric::unavailable("abra o Codex para renovar o login")
+        );
+        assert!(!format!("{state:?}").contains("fake-codex-token-0000"));
+        assert_eq!(hash(&auth), before);
+        assert_eq!(fs::read_to_string(&auth).unwrap(), CODEX_AUTH);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn codex_without_auth_file_is_not_found() {
+        use hud_core::ai::{codex_state, CodexProvider};
+        let dir = scratch("nocodex");
+        let provider = CodexProvider {
+            credentials: FileCredentials::new(FileCredentials::codex_path(&dir)),
+            api: CodexUnauthorized,
+        };
+        assert_eq!(
+            codex_state(&provider, NOW),
+            hud_core::metrics::Metric::unavailable("Codex não encontrado")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
