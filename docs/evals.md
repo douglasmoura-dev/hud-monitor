@@ -132,7 +132,16 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - Presença: `.copilot` e `.local\share\opencode` listam "presente"; Ollama via GET `127.0.0.1:11434/api/tags` com 1 s, "ativo"/"inativo" (testado com servidor TCP local).
 - `cargo test`: `extras::tests` (core) e `sources::extras::tests` (app, incluindo hash do arquivo de credenciais inalterado e token fake ausente). Executável release iniciado 32 s: memória privada 15,5 MB; binário 9 611 776 → 9 678 336 bytes (+66 KB, nenhuma dependência nova). Captura não versionada (HUD translúcido).
 
+<<<<<<< HEAD
 ## Verificações T12 (issue #13)
 - `cargo test`: `cleanup::tests` (core, com `FakeFs`) cobre `proj-a/node_modules` (pai há 120 dias, 500 MB) listado e `proj-b` (10 dias) ignorado, `Downloads/old.zip` de 200 dias com `checked = false` e `review = true`, link dentro de `%TEMP%` apontando para `C:\Users` não seguido nem somado, Windows Update sem admin com `Unavailable("precisa de admin")`, regra de 24 h dos temporários, Docker só listado quando instalado (e nunca medido), pastas ocultas fora da busca de projetos, total dos marcados. `sources::cleanup::tests` (app) usa pasta temporária real: uma junção (`mklink /J`) apontando para fora da árvore escaneada não é seguida (só os 100 bytes próprios são somados) e os arquivos de fora ficam intactos.
 - `target\release\hud-app.exe --scanner` na máquina real (`APPDATA` temporário), aberto 25 s e 150 s: a janela "Limpeza de disco" abriu, o HUD continuou respondendo, as categorias apareceram uma a uma (Temporários `≥ 1.8 GB` por pastas travadas, Lixeira `0 B`, Cache de navegadores `1.4 GB`, `node_modules antigos` `≥ 9.0 GB`) e as seguras vieram marcadas, com "Selecionado" somando só as marcadas. stderr vazio; memória privada 18,0-18,6 MB com HUD + scanner (orçamento 30 MB).
 - Escaneamento completo nesta máquina passa de 150 s (muitas pastas em Documents/source); a janela não trava. Não foi observado o fim do scan na tela, então os rótulos "revisar" e o estado de Windows Update sem admin só foram verificados por teste unitário, não na janela real. Nada é apagado: o scanner só lista diretórios e lê metadados.
+=======
+## E15 — Temas visuais
+- Input: `config.toml` sem `appearance.theme` → Expect: carrega com tema `gamer-hud` e as cores atuais (`#5DCAA5` destaque).
+- Input: `theme = "cyberpunk"` / `"minimal"` / `"terminal"` / `"light"` → Expect: HUD, barrinha e scanner usam a paleta do tema; `theme = "xyz"` → config inválida com erro que nomeia `appearance.theme`.
+- Input: bandeja → Tema → Terminal retrô com o HUD aberto → Expect: as cores mudam em ≤ 1 s sem reiniciar e o config salvo tem `theme = "terminal"`.
+- Input: cada tema com uma métrica em Warn e outra em Crit → Expect: contraste de texto de alerta sobre o fundo do tema ≥ 3:1 (teste sobre a paleta).
+- Input: build release com tema trocado 10 vezes → Expect: memória privada continua ≤ 30 MB.
+>>>>>>> 47613e6 (docs: especificar temas visuais (C7, E15, T15))

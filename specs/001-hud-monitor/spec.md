@@ -47,6 +47,11 @@ Desenvolvedor que usa várias IAs de código (Claude Pro, Codex, Gemini, Cursor,
 2. Mostra o tamanho de cada categoria; categorias seguras vêm marcadas, arriscadas vêm desmarcadas com o rótulo "revisar".
 3. O usuário confirma e os arquivos vão para a Lixeira. O app mostra quanto foi liberado.
 
+### C7 — Temas visuais
+1. O usuário escolhe um tema pronto: **Gamer HUD** (atual, padrão), **Cyberpunk neon**, **Minimalista**, **Terminal retrô** ou **Claro**.
+2. O tema vale para o HUD, a barrinha e o scanner ao mesmo tempo e troca na hora, sem reiniciar, pelo menu da bandeja ou pelo `config.toml`.
+3. As cores de alerta (âmbar e vermelho) continuam legíveis em todos os temas.
+
 ## Requisitos não funcionais
 - Memória privada ≤ 30 MB e CPU média ≤ 1% (ver constituição).
 - Funciona sem administrador; recursos que exigem admin aparecem como indisponíveis com explicação.

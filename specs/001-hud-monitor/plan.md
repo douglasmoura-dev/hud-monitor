@@ -91,5 +91,11 @@ Remoção: `IFileOperation` com `FOFX_RECYCLEONDELETE`, em thread de fundo, com 
 - Scanner libera os resultados ao fechar a janela.
 - CI publica o binário release; a issue de orçamento mede memória privada com HUD + barrinha por 10 min.
 
-## 8. Tarefas
+## 8. Temas
+- `hud-core::theme`: enum `ThemeId { GamerHud, Cyberpunk, Minimal, Terminal, Light }` com serde (`gamer-hud`, `cyberpunk`, `minimal`, `terminal`, `light`) e uma paleta por tema (cores de destaque, texto, texto fraco, trilho das barras, fundo, borda, aviso, crítico, fonte de título/número). Campo `appearance.theme` no config com default `gamer-hud`, para configs antigas continuarem carregando.
+- Slint: o `global Theme` vira propriedades `in-out` preenchidas pela paleta; `Minimalista` sem brilho nem cantos chanfrados, `Terminal` só Share Tech Mono.
+- Bandeja: submenu "Tema" com os 5, marcado o atual; trocar salva o config.
+- Sem cor livre nem temas em arquivo (decisão do usuário em 2026-11-08).
+
+## 9. Tarefas
 Ver [tasks.md](tasks.md). Cada tarefa vira uma issue com os critérios de [docs/evals.md](../../docs/evals.md).
