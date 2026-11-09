@@ -3,7 +3,7 @@
 //! The palettes are plain data; hud-app copies the chosen one into the Slint `Theme` global.
 //! There is no free-form color and no theme file (spec C7).
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// Minimum contrast of alert text over the theme background (WCAG large-text bar).
 pub const MIN_ALERT_CONTRAST: f32 = 3.0;
@@ -52,7 +52,8 @@ pub fn contrast(a: Color, b: Color) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(try_from = "String")]
 pub enum ThemeId {
     #[default]
     GamerHud,
@@ -103,14 +104,16 @@ impl Serialize for ThemeId {
     }
 }
 
-impl<'de> Deserialize<'de> for ThemeId {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let id = String::deserialize(d)?;
-        Self::from_id(&id).ok_or_else(|| {
-            serde::de::Error::custom(format!(
-                "invalid config field `appearance.theme`: unknown theme `{id}`"
-            ))
-        })
+/// Config text that is not one of the five theme ids.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid config field `appearance.theme`: unknown theme `{0}`")]
+pub struct UnknownTheme(String);
+
+impl TryFrom<String> for ThemeId {
+    type Error = UnknownTheme;
+
+    fn try_from(id: String) -> Result<Self, UnknownTheme> {
+        Self::from_id(&id).ok_or(UnknownTheme(id))
     }
 }
 
