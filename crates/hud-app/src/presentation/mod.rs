@@ -120,5 +120,6 @@ mod tests {
     fn hud_pin_icon_toggles_click_through_and_shows_its_state() {
         assert!(HUD.contains("root.pin()"));
         assert!(HUD.contains("root.pinned ? Theme.teal"));
+        assert!(HUD.contains("root.pin-tip"));
     }
 }

@@ -60,6 +60,9 @@ impl SlowTick {
             }
             self.shown = Some(refresh.view);
         }
+        if let Some(tray) = self.services.tray.as_ref() {
+            tray.set_pinned(self.services.controller.config().hud.click_through);
+        }
         self.services
             .looks
             .refresh(&self.services.windows, &self.services.controller);
@@ -97,6 +100,7 @@ fn dispatch(services: &Services, action: TrayAction) {
             services.looks.refresh(&services.windows, controller);
         }
         TrayAction::Scanner => scanner::open(&services.scanner, &palette_of(controller)),
+        TrayAction::Pin => controller.toggle_pin(),
         TrayAction::Quit => controller.quit(),
     }
 }

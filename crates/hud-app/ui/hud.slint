@@ -114,6 +114,7 @@ export component Hud inherits Window {
     callback minimize();
     callback pin();
     in property <bool> pinned;
+    in property <string> pin-tip;
     in property <string> notice;
     in property <float> bg-alpha: 0.88;
     in property <string> clock: "--:--";
@@ -195,6 +196,7 @@ export component Hud inherits Window {
                 x: parent.width - 86px;
                 width: 22px;
                 clicked => { root.pin(); }
+                changed has-hover => { root.hover-tip = self.has-hover ? root.pin-tip : ""; }
                 Rectangle {
                     x: 6px;
                     y: 10px;

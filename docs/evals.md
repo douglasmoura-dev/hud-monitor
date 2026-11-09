@@ -182,3 +182,9 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - Release, `scripts/measure.ps1 -DurationSeconds 240` (HUD aberto, config antigo sem `[appearance]`): memória máxima 15,6 MB, CPU média 0,85% de um núcleo (0,21% da máquina), dentro do orçamento de 1%.
 - Release: `target\release\hud-app.exe` com `theme = "terminal"` e com `theme = "light"` sobe e continua rodando; com `theme = "xyz"` encerra com código 1.
 - Não verificado: o clique real em Bandeja → Tema (o menu da bandeja não foi acionado com o mouse; o caminho de código é o mesmo do `--theme-cycles`) e a aparência das paletas em tela (nenhuma captura foi feita nem versionada).
+
+## Verificações — correção do modo fixado
+- `cargo test`: `windowing::tests::pin_toggles_click_through_and_tells_the_host` agora também confirma que o config salvo reflete `click_through` (ligar e desligar); `presentation::tests` confirma que o ícone de fixar usa `root.pin-tip` como dica ao passar o mouse.
+- Bandeja: o item "Fixar HUD (ignorar mouse)" (`TrayAction::Pin`) chama `Controller::toggle_pin`, o mesmo caso de uso do ícone, então estado, estilo da janela e config salvo ficam iguais; o visto é sincronizado com `hud.click_through` a cada 1 s, inclusive quando o ícone é usado com Ctrl.
+- Release: `target\release\hud-app.exe` com `APPDATA` temporário sobe e continua rodando (encerrado à mão); só avisou que os atalhos já estavam registrados pela instância real do usuário. Nenhum arquivo do `%APPDATA%\hud-monitor` real foi tocado e a chave Run não foi alterada.
+- Não verificado: o clique real no item da bandeja e o texto da dica na tela (nenhuma captura feita).

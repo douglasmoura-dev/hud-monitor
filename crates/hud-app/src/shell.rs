@@ -10,7 +10,7 @@ use hud_core::integration::{
 };
 use hud_core::theme::{Color, ThemeId};
 use hud_core::ui_text::{
-    theme_name, TRAY_PROFILES, TRAY_QUIT, TRAY_SCANNER, TRAY_SHOW_HUD, TRAY_SHOW_MINIBAR,
+    theme_name, TRAY_PIN, TRAY_PROFILES, TRAY_QUIT, TRAY_SCANNER, TRAY_SHOW_HUD, TRAY_SHOW_MINIBAR,
     TRAY_THEME, TRAY_TOOLTIP,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -39,6 +39,7 @@ pub enum TrayAction {
     Profile(String),
     Theme(ThemeId),
     Scanner,
+    Pin,
     Quit,
 }
 
@@ -47,6 +48,7 @@ pub struct Tray {
     show_hud: MenuItem,
     show_minibar: MenuItem,
     scanner: MenuItem,
+    pin: CheckMenuItem,
     quit: MenuItem,
     profiles: Vec<(MenuItem, String)>,
     themes: Vec<(CheckMenuItem, ThemeId)>,
@@ -101,10 +103,11 @@ fn theme_items(
 }
 
 impl Tray {
-    pub fn new(profiles: &[Profile], theme: ThemeId) -> Result<Self, ShellError> {
+    pub fn new(profiles: &[Profile], theme: ThemeId, pinned: bool) -> Result<Self, ShellError> {
         let show_hud = MenuItem::new(TRAY_SHOW_HUD, true, None);
         let show_minibar = MenuItem::new(TRAY_SHOW_MINIBAR, true, None);
         let scanner = MenuItem::new(TRAY_SCANNER, true, None);
+        let pin = CheckMenuItem::new(TRAY_PIN, true, pinned, None);
         let quit = MenuItem::new(TRAY_QUIT, true, None);
         let submenu = Submenu::new(TRAY_PROFILES, !profiles.is_empty());
         let items = profile_items(profiles, &submenu)?;
@@ -117,6 +120,7 @@ impl Tray {
             &submenu,
             &theme_menu,
             &scanner,
+            &pin,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -132,6 +136,7 @@ impl Tray {
             show_hud,
             show_minibar,
             scanner,
+            pin,
             quit,
             profiles: items,
             themes: theme_items,
@@ -142,6 +147,13 @@ impl Tray {
     pub fn set_theme(&self, theme: ThemeId) {
         for (item, id) in &self.themes {
             item.set_checked(*id == theme);
+        }
+    }
+
+    /// Mirrors `hud.click_through` in the "Fixar HUD" check mark.
+    pub fn set_pinned(&self, pinned: bool) {
+        if self.pin.is_checked() != pinned {
+            self.pin.set_checked(pinned);
         }
     }
 
@@ -166,6 +178,8 @@ impl Tray {
             Some(TrayAction::ShowMinibar)
         } else if *id == *self.scanner.id() {
             Some(TrayAction::Scanner)
+        } else if *id == *self.pin.id() {
+            Some(TrayAction::Pin)
         } else if *id == *self.quit.id() {
             Some(TrayAction::Quit)
         } else if let Some((_, theme)) = self.themes.iter().find(|(item, _)| *item.id() == *id) {
@@ -234,7 +248,11 @@ pub struct Shell {
 
 /// Starts the tray icon and registers the hotkeys; failures only produce a notice.
 pub fn start(config: &Config) -> Shell {
-    let tray = Tray::new(&config.profiles, config.appearance.theme);
+    let tray = Tray::new(
+        &config.profiles,
+        config.appearance.theme,
+        config.hud.click_through,
+    );
     let mut hotkeys = Hotkeys::new();
     let warnings = hotkeys
         .as_mut()
