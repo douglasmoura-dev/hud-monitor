@@ -183,6 +183,22 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - Release: `target\release\hud-app.exe` com `theme = "terminal"` e com `theme = "light"` sobe e continua rodando; com `theme = "xyz"` encerra com código 1.
 - Não verificado: o clique real em Bandeja → Tema (o menu da bandeja não foi acionado com o mouse; o caminho de código é o mesmo do `--theme-cycles`) e a aparência das paletas em tela (nenhuma captura foi feita nem versionada).
 
+## E17 — Temas v2 (identidade própria)
+- Input: tema `cyberpunk` → Expect: títulos e números em Orbitron, faixa de título amarela (`#FCEE0A`) com texto escuro, cantos cortados na diagonal, barras em blocos segmentados.
+- Input: tema `minimal` → Expect: Inter, rótulos em minúsculas, nenhuma barra de progresso visível, números maiores que no `gamer-hud`.
+- Input: tema `terminal` → Expect: VT323 em todos os textos, barras como texto ASCII (`[####....]` com o número de `#` proporcional ao %), título em forma de prompt, linhas de varredura.
+- Input: tema `light` → Expect: fundo claro, métricas principais em cartões com ponto de status colorido pela severidade.
+- Input: teste sobre os estilos → Expect: nenhum par de temas tem a mesma combinação de fonte de número + estilo de barra + forma de canto.
+- Input: build release, tema trocado 10 vezes e 10 min parado → Expect: memória privada ≤ 30 MB e CPU média ≤ 1% de um núcleo; exe com as fontes novas e os arquivos OFL no repositório.
+
+## E18 — Redimensionar por escala
+- Input: arrastar a alça do canto do HUD +50% na diagonal → Expect: HUD com 1,5× a largura e a altura base, fontes e barras proporcionais; ao soltar, `config.toml` tem `scale = 1.5` na seção do HUD.
+- Input: `scale = 5.0` ou `0.1` no config → Expect: carrega preso a 2.0 ou 0.6, sem erro.
+- Input: config sem `scale` → Expect: escala 1.0 (configs antigas continuam carregando).
+- Input: escala 2.0 com o HUD perto da borda da tela → Expect: a janela é puxada para dentro da tela usando o tamanho escalado.
+- Input: barrinha redimensionada para 0.8 → Expect: só a barrinha muda; o HUD mantém a própria escala.
+- Input: modo "clicar através" ligado sem Ctrl → Expect: a alça não responde; com Ctrl segurado, redimensiona.
+
 ## Verificações — correção do modo fixado
 - `cargo test`: `windowing::tests::pin_toggles_click_through_and_tells_the_host` agora também confirma que o config salvo reflete `click_through` (ligar e desligar); `presentation::tests` confirma que o ícone de fixar usa `root.pin-tip` como dica ao passar o mouse.
 - Bandeja: o item "Fixar HUD (ignorar mouse)" (`TrayAction::Pin`) chama `Controller::toggle_pin`, o mesmo caso de uso do ícone, então estado, estilo da janela e config salvo ficam iguais; o visto é sincronizado com `hud.click_through` a cada 1 s, inclusive quando o ícone é usado com Ctrl.
