@@ -38,7 +38,7 @@ hud-monitor/
 │     ├─ sources/             implementações reais das portas (sysinfo, PDH, NVML, ping, ureq, arquivos)
 │     ├─ winffi.rs            único módulo com `unsafe`
 │     ├─ shell.rs, store.rs   bandeja, atalhos, visual nativo, autostart; config.toml em %APPDATA%
-│     ├─ collect.rs, ai.rs    threads de coleta (1 Hz, ping 5 s) e de IAs (60 s)
+│     ├─ collect.rs, ai.rs    threads de coleta (1 Hz, ping 5 s) e de IAs (60 s; o Claude só chama a API a cada 5 min, §5)
 │     ├─ clock.rs             relógio do sistema
 │     ├─ presentation/        tipos gerados do Slint, mapeamento view model → Slint, WindowHost do Slint
 │     ├─ scanner.rs           janela e threads do scanner/remoção
@@ -50,7 +50,7 @@ hud-monitor/
 
 ## 3. Fluxo de dados
 1. Uma thread coletora lê as fontes a 1 Hz e monta um `Snapshot` (hud-core).
-2. Outra thread consulta as IAs a cada 60 s e monta `Vec<ProviderStatus>`.
+2. Outra thread consulta as IAs a cada 60 s (o endpoint de uso do Claude é chamado no máximo a cada 5 min, §5) e monta `Vec<ProviderStatus>`.
 3. Os dois enviam por canal para a thread de UI, que chama `slint::invoke_from_event_loop` e atualiza os modelos das duas janelas. As duas janelas leem o mesmo `Snapshot`, então nunca divergem.
 4. `alerts::evaluate` roda sobre o snapshot; nível `Crit` com HUD escondido mostra a barrinha.
 
@@ -80,6 +80,12 @@ Cada provedor implementa `trait AiProvider { fn detect(&self) -> bool; fn fetch(
 | Copilot, OpenCode, Ollama | pastas `.copilot`, `.local\share\opencode`, processo/porta 11434 do Ollama | Só ativo/inativo | — |
 
 **Achado de 2026-11-07:** o token do `.credentials.json` voltou 401 e o arquivo tem `expiresAt = 0`. O app **não** renova tokens (ADR 0002): renovar rotaciona o refresh token e pode deslogar o Claude Code. Com 401 o app usa o plano B e mostra no tooltip "abra o Claude Code para renovar o login".
+
+**Achado de 2026-11-09:** `GET /api/oauth/usage` passou a responder 429 (`rate_limit_error`) na máquina do usuário, e o poll de 60 s caía no plano B a cada falha, jogando fora o último percentual. Regras do Claude agora (em `hud-core::ai`, testadas com API falsa):
+- A API é chamada no máximo a cada **5 min**; entre as chamadas a leitura anterior é repetida sem marca.
+- 429 vira `ApiError::RateLimited { retry_after }` (`Retry-After` em segundos, se vier). Espera-se `max(Retry-After, backoff)` com backoff dobrando a partir de 5 min: 5, 10, 20, 30, 30 min (teto 30 min); um sucesso zera.
+- Com 429 ou outro erro transitório e já existindo uma leitura boa, ela continua na tela (percentual e reset) com o tooltip "dados de há N min — API limitou as consultas" (ou o motivo do erro). O plano B (tokens locais, `~`) só aparece quando nunca houve leitura boa. 401 continua indo ao plano B com a dica de renovar o login.
+- O app segue sem renovar tokens e sem chamar endpoints de OAuth; o Codex mantém o intervalo de 60 s.
 
 ## 6. Scanner de limpeza
 | Categoria | Caminhos | Regra | Marcado |

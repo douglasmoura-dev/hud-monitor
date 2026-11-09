@@ -204,3 +204,9 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - Bandeja: o item "Fixar HUD (ignorar mouse)" (`TrayAction::Pin`) chama `Controller::toggle_pin`, o mesmo caso de uso do ícone, então estado, estilo da janela e config salvo ficam iguais; o visto é sincronizado com `hud.click_through` a cada 1 s, inclusive quando o ícone é usado com Ctrl.
 - Release: `target\release\hud-app.exe` com `APPDATA` temporário sobe e continua rodando (encerrado à mão); só avisou que os atalhos já estavam registrados pela instância real do usuário. Nenhum arquivo do `%APPDATA%\hud-monitor` real foi tocado e a chave Run não foi alterada.
 - Não verificado: o clique real no item da bandeja e o texto da dica na tela (nenhuma captura feita).
+
+## Verificações — Claude 429
+- `cargo test` (hud-core::ai): 429 sem leitura prévia mostra a estimativa local com a dica "API limitou as consultas"; 429 depois de uma leitura boa mantém 72%/41% e o reset, com a dica "dados de há 17 min — API limitou as consultas"; a idade cresce enquanto o backoff segura as chamadas; erro transitório de rede também mantém a leitura; 401 continua indo para a estimativa com a dica de renovar o login.
+- `cargo test` (hud-core::ai): agenda de espera 5, 10, 20, 30, 30 min; `Retry-After` vence só quando maior; um sucesso zera a sequência; a API não é chamada de novo antes de 5 min (1 chamada em 5 polls de 60 s).
+- `cargo test` (hud-app::sources::claude): HTTP 429 vira `RateLimited` com os segundos do `Retry-After` (ausente ou ilegível vira `None`).
+- Não verificado: a resposta real da API da Anthropic (nenhuma chamada feita nesta PR) nem o tooltip na tela.
