@@ -4,6 +4,7 @@
 //! text in one module means a wording change touches one file and nothing else.
 
 use crate::ai::AiError;
+use crate::theme::ThemeId;
 
 // ---------- waiting and shared reasons ----------
 
@@ -125,7 +126,19 @@ pub const TRAY_SHOW_HUD: &str = "Mostrar HUD";
 pub const TRAY_SHOW_MINIBAR: &str = "Mostrar barrinha";
 pub const TRAY_SCANNER: &str = "Limpeza de disco...";
 pub const TRAY_PROFILES: &str = "Perfis";
+pub const TRAY_THEME: &str = "Tema";
 pub const TRAY_QUIT: &str = "Sair";
+
+/// Tray menu label of a theme.
+pub fn theme_name(theme: ThemeId) -> &'static str {
+    match theme {
+        ThemeId::GamerHud => "Gamer HUD",
+        ThemeId::Cyberpunk => "Cyberpunk",
+        ThemeId::Minimal => "Minimalista",
+        ThemeId::Terminal => "Terminal retrô",
+        ThemeId::Light => "Claro",
+    }
+}
 
 // ---------- disk cleanup scanner ----------
 

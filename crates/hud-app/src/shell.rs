@@ -8,12 +8,14 @@ use hud_core::config::{Config, Profile, WindowState};
 use hud_core::integration::{
     apply_autostart, apply_backdrop, register_hotkeys, shell_notice, HotkeyApi, IntegrationError,
 };
+use hud_core::theme::{Color, ThemeId};
 use hud_core::ui_text::{
-    TRAY_PROFILES, TRAY_QUIT, TRAY_SCANNER, TRAY_SHOW_HUD, TRAY_SHOW_MINIBAR, TRAY_TOOLTIP,
+    theme_name, TRAY_PROFILES, TRAY_QUIT, TRAY_SCANNER, TRAY_SHOW_HUD, TRAY_SHOW_MINIBAR,
+    TRAY_THEME, TRAY_TOOLTIP,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::cell::Cell;
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 const ICON_SIZE: u32 = 16;
@@ -35,6 +37,7 @@ pub enum TrayAction {
     ShowHud,
     ShowMinibar,
     Profile(String),
+    Theme(ThemeId),
     Scanner,
     Quit,
 }
@@ -46,6 +49,7 @@ pub struct Tray {
     scanner: MenuItem,
     quit: MenuItem,
     profiles: Vec<(MenuItem, String)>,
+    themes: Vec<(CheckMenuItem, ThemeId)>,
 }
 
 /// Filled circle in the accent color on a transparent square.
@@ -77,19 +81,41 @@ fn profile_items(
     Ok(items)
 }
 
+fn theme_items(
+    current: ThemeId,
+    submenu: &Submenu,
+) -> Result<Vec<(CheckMenuItem, ThemeId)>, ShellError> {
+    let items: Vec<(CheckMenuItem, ThemeId)> = ThemeId::ALL
+        .into_iter()
+        .map(|t| {
+            (
+                CheckMenuItem::new(theme_name(t), true, t == current, None),
+                t,
+            )
+        })
+        .collect();
+    for (item, _) in &items {
+        submenu.append(item).map_err(tray_err)?;
+    }
+    Ok(items)
+}
+
 impl Tray {
-    pub fn new(profiles: &[Profile]) -> Result<Self, ShellError> {
+    pub fn new(profiles: &[Profile], theme: ThemeId) -> Result<Self, ShellError> {
         let show_hud = MenuItem::new(TRAY_SHOW_HUD, true, None);
         let show_minibar = MenuItem::new(TRAY_SHOW_MINIBAR, true, None);
         let scanner = MenuItem::new(TRAY_SCANNER, true, None);
         let quit = MenuItem::new(TRAY_QUIT, true, None);
         let submenu = Submenu::new(TRAY_PROFILES, !profiles.is_empty());
         let items = profile_items(profiles, &submenu)?;
+        let theme_menu = Submenu::new(TRAY_THEME, true);
+        let theme_items = theme_items(theme, &theme_menu)?;
         let menu = Menu::new();
         menu.append_items(&[
             &show_hud,
             &show_minibar,
             &submenu,
+            &theme_menu,
             &scanner,
             &PredefinedMenuItem::separator(),
             &quit,
@@ -108,7 +134,15 @@ impl Tray {
             scanner,
             quit,
             profiles: items,
+            themes: theme_items,
         })
+    }
+
+    /// Ticks only the current theme in the "Tema" submenu.
+    pub fn set_theme(&self, theme: ThemeId) {
+        for (item, id) in &self.themes {
+            item.set_checked(*id == theme);
+        }
     }
 
     pub fn set_tooltip(&self, text: &str) {
@@ -134,6 +168,8 @@ impl Tray {
             Some(TrayAction::Scanner)
         } else if *id == *self.quit.id() {
             Some(TrayAction::Quit)
+        } else if let Some((_, theme)) = self.themes.iter().find(|(item, _)| *item.id() == *id) {
+            Some(TrayAction::Theme(*theme))
         } else {
             self.profiles
                 .iter()
@@ -198,7 +234,7 @@ pub struct Shell {
 
 /// Starts the tray icon and registers the hotkeys; failures only produce a notice.
 pub fn start(config: &Config) -> Shell {
-    let tray = Tray::new(&config.profiles);
+    let tray = Tray::new(&config.profiles, config.appearance.theme);
     let mut hotkeys = Hotkeys::new();
     let warnings = hotkeys
         .as_mut()
@@ -241,7 +277,8 @@ pub fn effective_opacity(opacity: f32) -> f32 {
 /// Keeps one window's native look (acrylic, click-through) in sync with its config.
 #[derive(Default)]
 pub struct NativeLook {
-    hwnd: Cell<isize>,
+    /// Native window and theme background the acrylic tint was last applied for.
+    tinted: Cell<Option<(isize, Color)>>,
 }
 
 impl NativeLook {
@@ -252,14 +289,16 @@ impl NativeLook {
         window: &slint::Window,
         state: &WindowState,
         ctrl_down: bool,
+        background: Color,
         set_alpha: impl Fn(f32),
     ) {
         let Some(hwnd) = hwnd_of(window) else {
             return;
         };
-        if self.hwnd.replace(hwnd) != hwnd {
+        if self.tinted.replace(Some((hwnd, background))) != Some((hwnd, background)) {
             let opacity = effective_opacity(state.opacity);
-            let out = apply_backdrop(&mut winffi::WindowBackdrop(hwnd), state.acrylic, opacity);
+            let backdrop = &mut winffi::WindowBackdrop(hwnd);
+            let out = apply_backdrop(backdrop, state.acrylic, opacity, background);
             set_alpha(out.slint_alpha);
             if let Some(warning) = out.warning {
                 eprintln!("hud-monitor: {warning}");

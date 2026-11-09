@@ -2,6 +2,7 @@
 
 use crate::appearance::acrylic_tint;
 use crate::config::Hotkeys;
+use crate::theme::Color;
 use crate::ui_text::{hotkeys_unavailable, tray_unavailable};
 use std::path::Path;
 
@@ -23,14 +24,19 @@ pub struct BackdropOutcome {
 }
 
 /// Tries acrylic when wanted; on failure keeps the solid background at the same opacity.
-pub fn apply_backdrop(api: &mut dyn Backdrop, acrylic: bool, opacity: f32) -> BackdropOutcome {
+pub fn apply_backdrop(
+    api: &mut dyn Backdrop,
+    acrylic: bool,
+    opacity: f32,
+    background: Color,
+) -> BackdropOutcome {
     if !acrylic {
         return BackdropOutcome {
             slint_alpha: opacity,
             warning: None,
         };
     }
-    match api.enable_acrylic(acrylic_tint(opacity)) {
+    match api.enable_acrylic(acrylic_tint(background, opacity)) {
         Ok(()) => BackdropOutcome {
             slint_alpha: 0.0,
             warning: None,
@@ -112,15 +118,15 @@ mod tests {
     #[test]
     fn acrylic_success_hands_the_tint_to_the_os() {
         let mut api = FakeBackdrop(None, vec![]);
-        let out = apply_backdrop(&mut api, true, 0.55);
-        assert_eq!(api.1, vec![acrylic_tint(0.55)]);
+        let out = apply_backdrop(&mut api, true, 0.55, BG);
+        assert_eq!(api.1, vec![acrylic_tint(BG, 0.55)]);
         assert!(out.warning.is_none() && out.slint_alpha == 0.0);
     }
 
     #[test]
     fn acrylic_failure_keeps_solid_background_and_warns() {
         let mut api = FakeBackdrop(Some("denied"), vec![]);
-        let out = apply_backdrop(&mut api, true, 0.55);
+        let out = apply_backdrop(&mut api, true, 0.55, BG);
         assert_eq!(out.slint_alpha, 0.55);
         assert!(out.warning.unwrap().contains("denied"));
     }
@@ -128,9 +134,11 @@ mod tests {
     #[test]
     fn acrylic_off_never_calls_the_os() {
         let mut api = FakeBackdrop(None, vec![]);
-        let out = apply_backdrop(&mut api, false, 0.7);
+        let out = apply_backdrop(&mut api, false, 0.7, BG);
         assert!(api.1.is_empty() && out.slint_alpha == 0.7 && out.warning.is_none());
     }
+
+    const BG: Color = Color::rgb(0x0A0E14);
 
     struct FakeHotkeys(&'static str);
     impl HotkeyApi for FakeHotkeys {

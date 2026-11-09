@@ -3,6 +3,7 @@
 
 use crate::config::{Config, Orientation};
 use crate::position::{Point, Size};
+use crate::theme::{Palette, ThemeId};
 use crate::view::minibar_size;
 use std::cell::{Ref, RefCell};
 
@@ -19,6 +20,8 @@ pub trait WindowHost {
     fn positions(&self) -> Option<(Point, Point)>;
     fn set_pinned(&self, pinned: bool);
     fn resize_minibar(&self, size: Size, vertical: bool);
+    /// Repaints every window (HUD, mini bar, scanner) with the palette.
+    fn apply_theme(&self, palette: &Palette);
     fn quit(&self);
     /// A failure worth a line in the log; never fatal.
     fn report(&self, message: &str);
@@ -145,6 +148,13 @@ impl<H: WindowHost, S: ConfigStore> WindowController<H, S> {
         self.save();
     }
 
+    /// Applies a theme to every window without a restart and persists the choice.
+    pub fn set_theme(&self, theme: ThemeId) {
+        self.config.borrow_mut().appearance.theme = theme;
+        self.host.apply_theme(&theme.palette());
+        self.save();
+    }
+
     pub fn quit(&self) {
         self.save();
         let _ = self.host.hide(WindowId::Hud);
@@ -213,6 +223,10 @@ mod tests {
             self.0.resized.set(Some((size, vertical)));
         }
 
+        fn apply_theme(&self, palette: &Palette) {
+            self.note(format!("theme {:?}", palette.accent));
+        }
+
         fn quit(&self) {
             self.note("quit".to_owned());
         }
@@ -250,6 +264,17 @@ mod tests {
         });
         let c = WindowController::new(host.clone(), store.clone(), config);
         (c, host, store)
+    }
+
+    #[test]
+    fn switching_theme_repaints_the_windows_and_saves_the_choice() {
+        let (c, host, store) = controller();
+        c.set_theme(ThemeId::Terminal);
+        assert_eq!(host.calls().len(), 1);
+        assert!(host.calls()[0].starts_with("theme "));
+        assert_eq!(c.config().appearance.theme, ThemeId::Terminal);
+        let saved = store.0.borrow();
+        assert_eq!(saved.last().unwrap().appearance.theme, ThemeId::Terminal);
     }
 
     #[test]

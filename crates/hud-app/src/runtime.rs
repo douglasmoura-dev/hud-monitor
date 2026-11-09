@@ -8,6 +8,7 @@ use crate::shell::{Hotkeys, Tray, TrayAction};
 use crate::winffi;
 use hud_core::dashboard::{Dashboard, DashboardView, ProviderStates};
 use hud_core::metrics::Snapshot;
+use hud_core::theme::{Palette, ThemeId};
 use std::{cell::Cell, rc::Rc, sync::mpsc::Receiver, time::Duration};
 
 const SLOW_TICK: Duration = Duration::from_secs(1);
@@ -78,15 +79,44 @@ pub fn start_slow(services: Rc<Services>, feeds: Feeds, dashboard: Dashboard) ->
     timer
 }
 
+fn palette_of(controller: &Controller) -> Palette {
+    controller.config().appearance.theme.palette()
+}
+
 fn dispatch(services: &Services, action: TrayAction) {
     let controller = &services.controller;
     match action {
         TrayAction::ShowHud => controller.switch_to(false),
         TrayAction::ShowMinibar => controller.switch_to(true),
         TrayAction::Profile(name) => controller.switch_profile(&name),
-        TrayAction::Scanner => scanner::open(&services.scanner),
+        TrayAction::Theme(theme) => {
+            controller.set_theme(theme);
+            if let Some(tray) = services.tray.as_ref() {
+                tray.set_theme(theme);
+            }
+            services.looks.refresh(&services.windows, controller);
+        }
+        TrayAction::Scanner => scanner::open(&services.scanner, &palette_of(controller)),
         TrayAction::Quit => controller.quit(),
     }
+}
+
+/// Theme shown after the `step`-th switch of `--theme-cycles` (0-based): walks the list in order.
+fn theme_for_step(step: u32) -> ThemeId {
+    ThemeId::ALL[(step as usize + 1) % ThemeId::ALL.len()]
+}
+
+/// `--theme-cycles N`: switches the theme once a second, N times, through the tray code path.
+pub fn cycle_themes(services: Rc<Services>, count: u32) -> slint::Timer {
+    let step = Cell::new(0);
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, SLOW_TICK, move || {
+        let n = step.replace(step.get() + 1);
+        if n < count {
+            dispatch(&services, TrayAction::Theme(theme_for_step(n)));
+        }
+    });
+    timer
 }
 
 /// 200 ms: drains tray and hotkey events and reacts when Ctrl changes.
@@ -120,4 +150,18 @@ pub fn start_fast(
         }
     });
     timer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_cycles_walk_every_theme_and_end_where_they_started() {
+        let seen: Vec<_> = (0..10).map(theme_for_step).collect();
+        assert_eq!(seen[0], ThemeId::Cyberpunk);
+        assert_eq!(seen[4], ThemeId::GamerHud);
+        assert!(ThemeId::ALL.iter().all(|t| seen.contains(t)));
+        assert_eq!(seen[9], ThemeId::GamerHud);
+    }
 }

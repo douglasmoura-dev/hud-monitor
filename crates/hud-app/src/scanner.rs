@@ -3,10 +3,11 @@
 //! the Recycle Bin. Closing the window cancels both and drops every result.
 
 use crate::clock;
-use crate::presentation::{CleanRow, Scanner};
+use crate::presentation::{paint_scanner, CleanRow, Scanner};
 use crate::sources::{env_roots, ShellRecycler, StdFs, WinSystem};
 use hud_core::cleanup::{scan_all, selected_text, Category, CategoryId};
 use hud_core::removal::{confirmation_lines, execute, plan_removal, selected_ids, Report};
+use hud_core::theme::Palette;
 use hud_core::ui_text::{
     categories_measured, confirm_move_to_bin, moving_to_bin, CLEANUP_WORKER_LOST, SCANNING,
     SYSTEM_CLOCK_UNAVAILABLE,
@@ -413,8 +414,9 @@ fn rescan(s: &mut State) {
     s.start();
 }
 
-fn new_session(slot: &Slot) -> Result<Session, slint::PlatformError> {
+fn new_session(slot: &Slot, palette: &Palette) -> Result<Session, slint::PlatformError> {
     let window = Scanner::new()?;
+    paint_scanner(&window, palette);
     let state = Rc::new(RefCell::new(State::default()));
     state.borrow_mut().start();
     refresh(&window, &state.borrow());
@@ -441,14 +443,21 @@ fn new_session(slot: &Slot) -> Result<Session, slint::PlatformError> {
 }
 
 /// Opens the scanner window (or brings the open one forward) and starts a fresh scan.
-pub fn open(slot: &Slot) {
+/// Repaints an open scanner window; nothing to do while it is closed.
+pub fn apply_theme(slot: &Slot, palette: &Palette) {
+    if let Some(session) = slot.borrow().as_ref() {
+        paint_scanner(&session.window, palette);
+    }
+}
+
+pub fn open(slot: &Slot, palette: &Palette) {
     if let Some(session) = slot.borrow().as_ref() {
         if let Err(e) = session.window.show() {
             eprintln!("hud-monitor: could not show scanner: {e}");
         }
         return;
     }
-    let shown = new_session(slot).and_then(|s| s.window.show().map(|()| s));
+    let shown = new_session(slot, palette).and_then(|s| s.window.show().map(|()| s));
     match shown {
         Ok(session) => *slot.borrow_mut() = Some(session),
         Err(e) => eprintln!("hud-monitor: could not open scanner: {e}"),
@@ -485,14 +494,14 @@ fn cycle_step(tick: u32, cycles: u32) -> Option<Step> {
 }
 
 /// Test hook for the memory budget (E14): opens and closes the scanner `cycles` times, 1 s apart.
-pub fn stress(slot: &Slot, cycles: u32) -> slint::Timer {
+pub fn stress(slot: &Slot, cycles: u32, palette: Palette) -> slint::Timer {
     let (slot, tick) = (slot.clone(), std::cell::Cell::new(0));
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_secs(1),
         move || match cycle_step(tick.replace(tick.get() + 1), cycles) {
-            Some(Step::Open) => open(&slot),
+            Some(Step::Open) => open(&slot, &palette),
             Some(Step::Close) => close(&slot),
             None => {}
         },
