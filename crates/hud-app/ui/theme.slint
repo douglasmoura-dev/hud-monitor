@@ -1,6 +1,12 @@
 import "fonts/Rajdhani-Medium.ttf";
 import "fonts/Rajdhani-SemiBold.ttf";
 import "fonts/ShareTechMono-Regular.ttf";
+import "fonts/Orbitron-Variable.ttf";
+import "fonts/ChakraPetch-Medium.ttf";
+import "fonts/ChakraPetch-SemiBold.ttf";
+import "fonts/Inter-Light.ttf";
+import "fonts/Inter-Medium.ttf";
+import "fonts/VT323-Regular.ttf";
 
 export struct Field {
     text: string,
@@ -44,10 +50,43 @@ export global Theme {
     in-out property <color> background: #0A0E14;
     in-out property <color> warn: #EF9F27;
     in-out property <color> crit: #E24B4A;
+    in-out property <color> title-text: #5DCAA5;
+    in-out property <color> title-icon: #7D8B97;
+    in-out property <color> card: #00000000;
+    in-out property <color> side-rule: #FF2E88;
+    in-out property <image> scan-tile;
     in-out property <length> radius: 6px;
+    in-out property <length> corner-cut: 0px;
+    in-out property <string> bar-style: "thin";
+    in-out property <string> title: "SYS // MONITOR";
+    in-out property <bool> borders: true;
+    in-out property <bool> airy: false;
+    in-out property <bool> cards: false;
+    in-out property <bool> prompt: false;
+    in-out property <bool> solid-strip: false;
+    in-out property <bool> has-side-rule: false;
+    in-out property <bool> has-scanlines: false;
+    in-out property <float> num-scale: 1;
+    in-out property <float> label-scale: 1;
+    in-out property <length> tracking: 1.5px;
+    // Changes with the theme, so bindings that call `lb` are evaluated again on a theme switch.
+    in-out property <int> theme-id: 0;
+    pure callback label-text(int, string) -> string;
+    pure callback ascii(float, int) -> string;
+    pure callback lit(float, int) -> int;
+    pure public function lb(key: string) -> string {
+        label-text(theme-id, key)
+    }
+    pure public function nf(size: length) -> length {
+        size * num-scale
+    }
+    pure public function lf(size: length) -> length {
+        size * label-scale
+    }
     pure public function tone(level: int, base: color) -> color {
         level == 2 ? crit : level == 1 ? warn : base
     }
+    in-out property <string> title-font: "Rajdhani";
     in-out property <string> label-font: "Rajdhani";
     in-out property <string> number-font: "Share Tech Mono";
 }
