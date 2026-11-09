@@ -4,8 +4,13 @@ use crate::winffi;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use hud_core::appearance::{click_through_style, passes_clicks, MIN_OPACITY};
-use hud_core::config::{Profile, WindowState};
-use hud_core::integration::{apply_backdrop, HotkeyApi, IntegrationError};
+use hud_core::config::{Config, Profile, WindowState};
+use hud_core::integration::{
+    apply_autostart, apply_backdrop, register_hotkeys, shell_notice, HotkeyApi, IntegrationError,
+};
+use hud_core::ui_text::{
+    TRAY_PROFILES, TRAY_QUIT, TRAY_SCANNER, TRAY_SHOW_HUD, TRAY_SHOW_MINIBAR, TRAY_TOOLTIP,
+};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::cell::Cell;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -60,11 +65,11 @@ fn circle_icon() -> Result<Icon, ShellError> {
 
 impl Tray {
     pub fn new(profiles: &[Profile]) -> Result<Self, ShellError> {
-        let show_hud = MenuItem::new("Mostrar HUD", true, None);
-        let show_minibar = MenuItem::new("Mostrar barrinha", true, None);
-        let scanner = MenuItem::new("Limpeza de disco...", true, None);
-        let quit = MenuItem::new("Sair", true, None);
-        let submenu = Submenu::new("Perfis", !profiles.is_empty());
+        let show_hud = MenuItem::new(TRAY_SHOW_HUD, true, None);
+        let show_minibar = MenuItem::new(TRAY_SHOW_MINIBAR, true, None);
+        let scanner = MenuItem::new(TRAY_SCANNER, true, None);
+        let quit = MenuItem::new(TRAY_QUIT, true, None);
+        let submenu = Submenu::new(TRAY_PROFILES, !profiles.is_empty());
         let items: Vec<(MenuItem, String)> = profiles
             .iter()
             .map(|p| (MenuItem::new(&p.name, true, None), p.name.clone()))
@@ -84,7 +89,7 @@ impl Tray {
         .map_err(tray_err)?;
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("HUD Monitor")
+            .with_tooltip(TRAY_TOOLTIP)
             .with_icon(circle_icon()?)
             .build()
             .map_err(tray_err)?;
@@ -173,6 +178,42 @@ impl HotkeyApi for Hotkeys {
             .map_err(|e| IntegrationError(e.to_string()))?;
         self.registered.push((hotkey.id(), combo.to_owned()));
         Ok(())
+    }
+}
+
+/// Tray icon and hotkeys as they came up; either may be missing, and `notice` says why.
+pub struct Shell {
+    pub tray: Option<Tray>,
+    pub hotkeys: Option<Hotkeys>,
+    pub notice: String,
+}
+
+/// Starts the tray icon and registers the hotkeys; failures only produce a notice.
+pub fn start(config: &Config) -> Shell {
+    let tray = Tray::new(&config.profiles);
+    let mut hotkeys = Hotkeys::new();
+    let warnings = hotkeys
+        .as_mut()
+        .map_or_else(|_| Vec::new(), |h| register_hotkeys(h, &config.hotkeys));
+    let notice = shell_notice(
+        tray.as_ref().err().map(ToString::to_string).as_deref(),
+        hotkeys.as_ref().err().map(ToString::to_string).as_deref(),
+        &warnings,
+    );
+    Shell {
+        tray: tray.ok(),
+        hotkeys: hotkeys.ok(),
+        notice,
+    }
+}
+
+/// Syncs the Run key with the config; failures are logged, never fatal.
+pub fn sync_autostart(enabled: bool) {
+    let result = std::env::current_exe()
+        .map_err(|e| IntegrationError(e.to_string()))
+        .and_then(|exe| apply_autostart(&mut winffi::RegistryRun, enabled, &exe));
+    if let Err(e) = result {
+        eprintln!("hud-monitor: autostart not applied: {e}");
     }
 }
 

@@ -2,9 +2,8 @@
 //! detection only checks that a file or folder exists.
 
 use hud_core::ai::{AiError, ApiError};
-use hud_core::extras::{
-    gemini_cutoff, tally_gemini_line, CursorUsageApi, Probe, RequestCounter, CURSOR_UNAVAILABLE,
-};
+use hud_core::extras::{gemini_cutoff, tally_gemini_line, CursorUsageApi, Probe, RequestCounter};
+use hud_core::ui_text::CURSOR_UNAVAILABLE;
 use std::{
     collections::HashSet,
     fs::{self, File},

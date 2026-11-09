@@ -4,6 +4,9 @@ use hud_core::ai::{
     log_cutoff, tally_line, AiError, ApiError, CodexUsageApi, CredentialsSource, Secret, TokenSums,
     TranscriptScanner, UsageApi,
 };
+use hud_core::ui_text::{
+    no_connection, ANTHROPIC_WITH_ARTICLE, CHATGPT_WITH_ARTICLE, UNREADABLE_RESPONSE,
+};
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader, ErrorKind, Read},
@@ -67,7 +70,7 @@ impl UsageApi for UreqApi {
             .get(USAGE_URL)
             .set("Authorization", &format!("Bearer {}", token.expose()))
             .set("anthropic-beta", BETA_HEADER);
-        read_response(request.call(), "a Anthropic")
+        read_response(request.call(), ANTHROPIC_WITH_ARTICLE)
     }
 }
 
@@ -79,7 +82,7 @@ impl CodexUsageApi for UreqApi {
             .get(CODEX_USAGE_URL)
             .set("Authorization", &format!("Bearer {}", token.expose()))
             .set("chatgpt-account-id", account_id);
-        read_response(request.call(), "o ChatGPT")
+        read_response(request.call(), CHATGPT_WITH_ARTICLE)
     }
 }
 
@@ -92,9 +95,7 @@ fn read_response(
         Ok(r) => Err(ApiError::Other(format!("HTTP {}", r.status()))),
         Err(ureq::Error::Status(401 | 403, _)) => Err(ApiError::Unauthorized),
         Err(ureq::Error::Status(code, _)) => Err(ApiError::Other(format!("HTTP {code}"))),
-        Err(ureq::Error::Transport(_)) => {
-            Err(ApiError::Other(format!("sem conexão com {provider}")))
-        }
+        Err(ureq::Error::Transport(_)) => Err(ApiError::Other(no_connection(provider))),
     }
 }
 
@@ -103,7 +104,7 @@ fn read_body(r: ureq::Response) -> Result<String, ApiError> {
     r.into_reader()
         .take(MAX_BODY)
         .read_to_string(&mut body)
-        .map_err(|_| ApiError::Other("resposta ilegível".to_owned()))?;
+        .map_err(|_| ApiError::Other(UNREADABLE_RESPONSE.to_owned()))?;
     Ok(body)
 }
 
@@ -291,7 +292,7 @@ mod tests {
         let state = codex_state(&provider, NOW);
         assert_eq!(
             state,
-            hud_core::metrics::Metric::unavailable("abra o Codex para renovar o login")
+            hud_core::metrics::Metric::unavailable(hud_core::ui_text::CODEX_RENEW_LOGIN_TIP)
         );
         assert!(!format!("{state:?}").contains("fake-codex-token-0000"));
         assert_eq!(hash(&auth), before);
@@ -309,7 +310,7 @@ mod tests {
         };
         assert_eq!(
             codex_state(&provider, NOW),
-            hud_core::metrics::Metric::unavailable("Codex não encontrado")
+            hud_core::metrics::Metric::unavailable(hud_core::ui_text::CODEX_NOT_FOUND)
         );
         fs::remove_dir_all(dir).unwrap();
     }

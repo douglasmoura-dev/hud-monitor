@@ -3,6 +3,10 @@
 use hud_core::integration::{Backdrop, IntegrationError, RunKey};
 use hud_core::metrics::{Date, DiskIo};
 use hud_core::position::Size;
+use hud_core::ui_text::{
+    com_unavailable, file_operation_unavailable, operation_flags_failed, recycle_bin_not_emptied,
+    recycle_bin_refused, recycle_bin_unavailable,
+};
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use windows::core::{w, PCWSTR};
@@ -89,7 +93,7 @@ pub fn recycle_bin_info() -> Result<(u64, u64), String> {
     // SAFETY: `info` is a live local with `cbSize` set as the API requires; a null root path
     // means every drive. The call only reads the Recycle Bin state.
     let result = unsafe { SHQueryRecycleBinW(PCWSTR::null(), &mut info) };
-    result.map_err(|e| format!("Lixeira indisponível: {e}"))?;
+    result.map_err(|e| recycle_bin_unavailable(&e.to_string()))?;
     Ok((
         u64::try_from(info.i64Size).map_err(|e| e.to_string())?,
         u64::try_from(info.i64NumItems).map_err(|e| e.to_string())?,
@@ -104,7 +108,7 @@ impl ComScope {
         // SAFETY: plain per-thread COM initialisation; the matching CoUninitialize is in Drop,
         // and only runs when this call succeeded.
         let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-        hr.ok().map_err(|e| format!("COM indisponível: {e}"))?;
+        hr.ok().map_err(|e| com_unavailable(&e.to_string()))?;
         Ok(Self)
     }
 }
@@ -143,10 +147,10 @@ pub fn recycle_paths(paths: &[PathBuf]) -> Result<(), String> {
     // delete.
     unsafe {
         let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)
-            .map_err(|e| format!("IFileOperation indisponível: {e}"))?;
+            .map_err(|e| file_operation_unavailable(&e.to_string()))?;
         operation
             .SetOperationFlags(recycle_flags())
-            .map_err(|e| format!("flags da operação: {e}"))?;
+            .map_err(|e| operation_flags_failed(&e.to_string()))?;
         for path in paths {
             let wide = wide_path(path);
             let item: Result<IShellItem, _> =
@@ -157,12 +161,12 @@ pub fn recycle_paths(paths: &[PathBuf]) -> Result<(), String> {
         }
         operation
             .PerformOperations()
-            .map_err(|e| format!("Lixeira recusou a operação: {e}"))
+            .map_err(|e| recycle_bin_refused(&e.to_string()))
     }
 }
 
 /// Empties the Recycle Bin of every drive without confirmation or progress UI. Only call it
-/// after the user confirmed the "Lixeira" category.
+/// after the user confirmed the Recycle Bin category.
 pub fn empty_recycle_bin() -> Result<(), String> {
     // SAFETY: a null window and a null root path mean "all drives"; no pointers are retained.
     unsafe {
@@ -172,7 +176,7 @@ pub fn empty_recycle_bin() -> Result<(), String> {
             SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND,
         )
     }
-    .map_err(|e| format!("Lixeira não pôde ser esvaziada: {e}"))
+    .map_err(|e| recycle_bin_not_emptied(&e.to_string()))
 }
 
 /// Current local date and seconds elapsed since local midnight.

@@ -2,10 +2,15 @@
 //! After an explicit confirmation a second background thread moves the marked categories to
 //! the Recycle Bin. Closing the window cancels both and drops every result.
 
+use crate::clock;
+use crate::presentation::{CleanRow, Scanner};
 use crate::sources::{env_roots, ShellRecycler, StdFs, WinSystem};
-use crate::{ai, CleanRow, Scanner};
 use hud_core::cleanup::{scan_all, selected_text, Category, CategoryId};
 use hud_core::removal::{confirmation_lines, execute, plan_removal, selected_ids, Report};
+use hud_core::ui_text::{
+    categories_measured, confirm_move_to_bin, moving_to_bin, CLEANUP_WORKER_LOST, SCANNING,
+    SYSTEM_CLOCK_UNAVAILABLE,
+};
 use slint::ComponentHandle;
 use std::{
     cell::RefCell,
@@ -20,8 +25,6 @@ use std::{
 };
 
 const POLL: Duration = Duration::from_millis(200);
-const WORKER_LOST: &str = "a limpeza parou de forma inesperada; confira a Lixeira";
-const CLOCK_UNAVAILABLE: &str = "relógio do sistema indisponível";
 
 enum ScanEvent {
     Category(Category),
@@ -69,7 +72,7 @@ fn drain<T>(events: &Receiver<T>) -> (Vec<T>, bool) {
 
 fn run_scan(tx: &mpsc::Sender<ScanEvent>, cancel: &AtomicBool) {
     let Some(now) = unix_now() else {
-        let _ = tx.send(ScanEvent::Failed(CLOCK_UNAVAILABLE.to_owned()));
+        let _ = tx.send(ScanEvent::Failed(SYSTEM_CLOCK_UNAVAILABLE.to_owned()));
         return;
     };
     scan_all(&StdFs, &WinSystem, &env_roots(), now, cancel, &mut |c| {
@@ -78,7 +81,7 @@ fn run_scan(tx: &mpsc::Sender<ScanEvent>, cancel: &AtomicBool) {
 }
 
 fn unix_now() -> Option<u64> {
-    ai::unix_now().and_then(|n| u64::try_from(n).ok())
+    clock::unix_now().and_then(|n| u64::try_from(n).ok())
 }
 
 enum RemovalEvent {
@@ -113,7 +116,7 @@ impl RemovalRun {
 /// the items to the Recycle Bin.
 fn run_removal(ids: &[CategoryId], tx: &mpsc::Sender<RemovalEvent>, cancel: &AtomicBool) {
     let Some(now) = unix_now() else {
-        let _ = tx.send(RemovalEvent::Failed(CLOCK_UNAVAILABLE.to_owned()));
+        let _ = tx.send(RemovalEvent::Failed(SYSTEM_CLOCK_UNAVAILABLE.to_owned()));
         return;
     };
     let plan = plan_removal(ids, &StdFs, &WinSystem, &env_roots(), now, cancel);
@@ -158,12 +161,8 @@ impl Phase {
     fn headline(&self) -> String {
         match self {
             Phase::List => String::new(),
-            Phase::Confirm { total, .. } => {
-                format!("Mover para a Lixeira ({total})? Dá para restaurar pela Lixeira.")
-            }
-            Phase::Running { done, total } => {
-                format!("Movendo para a Lixeira... {done} de {total}")
-            }
+            Phase::Confirm { total, .. } => confirm_move_to_bin(total),
+            Phase::Running { done, total } => moving_to_bin(*done, *total),
             Phase::Done { headline, .. } => headline.clone(),
         }
     }
@@ -253,7 +252,7 @@ impl State {
         }
         if ended && !finished {
             self.phase = Phase::Done {
-                headline: WORKER_LOST.to_owned(),
+                headline: CLEANUP_WORKER_LOST.to_owned(),
                 lines: Vec::new(),
             };
         }
@@ -339,8 +338,8 @@ fn text_lines(lines: Vec<String>) -> slint::ModelRc<slint::SharedString> {
 fn status_text(state: &State, scanning: bool) -> String {
     match (&state.failure, scanning) {
         (Some(reason), _) => reason.clone(),
-        (None, true) => "Escaneando...".to_owned(),
-        (None, false) => format!("{} categorias medidas", state.categories.len()),
+        (None, true) => SCANNING.to_owned(),
+        (None, false) => categories_measured(state.categories.len()),
     }
 }
 
@@ -529,10 +528,10 @@ mod tests {
     #[test]
     fn failure_text_replaces_the_status() {
         let state = State {
-            failure: Some(CLOCK_UNAVAILABLE.to_owned()),
+            failure: Some(SYSTEM_CLOCK_UNAVAILABLE.to_owned()),
             ..State::default()
         };
-        assert_eq!(status_text(&state, false), CLOCK_UNAVAILABLE);
+        assert_eq!(status_text(&state, false), SYSTEM_CLOCK_UNAVAILABLE);
         assert_eq!(status_text(&State::default(), true), "Escaneando...");
         assert_eq!(
             status_text(&State::default(), false),
@@ -573,7 +572,7 @@ mod tests {
         };
         assert_eq!(ids, &[CategoryId::Temp, CategoryId::PackageCaches]);
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("Temporários"));
+        assert!(lines[0].starts_with(CategoryId::Temp.name()));
         assert_eq!(total, "300 B");
         assert!(state.removal.is_none(), "no worker before confirming");
         assert!(state.phase.headline().contains("300 B"));
@@ -618,14 +617,14 @@ mod tests {
             .expect("send");
         state.absorb();
         assert_eq!(state.phase, Phase::Running { done: 2, total: 5 });
-        assert_eq!(state.phase.headline(), "Movendo para a Lixeira... 2 de 5");
+        assert_eq!(state.phase.headline(), moving_to_bin(2, 5));
         assert!(state.removal.is_some());
         let report = Report {
             moved_items: 2,
             freed_bytes: 300,
             skipped: vec![Skipped {
                 path: r"C:\t\locked".into(),
-                reason: "em uso".into(),
+                reason: "in use".into(),
             }],
             ..Report::default()
         };
@@ -634,7 +633,7 @@ mod tests {
         let Phase::Done { headline, lines } = &state.phase else {
             panic!("expected result, got {:?}", state.phase);
         };
-        assert!(headline.starts_with("Liberados 300 B"));
+        assert!(headline.starts_with(&hud_core::ui_text::freed("300 B")));
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("locked"));
         assert!(state.removal.is_none());
@@ -651,10 +650,10 @@ mod tests {
             phase: Phase::Running { done: 0, total: 0 },
             ..State::default()
         };
-        tx.send(RemovalEvent::Failed(CLOCK_UNAVAILABLE.to_owned()))
+        tx.send(RemovalEvent::Failed(SYSTEM_CLOCK_UNAVAILABLE.to_owned()))
             .expect("send");
         state.absorb();
-        assert_eq!(state.phase.headline(), CLOCK_UNAVAILABLE);
+        assert_eq!(state.phase.headline(), SYSTEM_CLOCK_UNAVAILABLE);
         assert!(state.phase.lines().is_empty());
     }
 
@@ -706,7 +705,7 @@ mod tests {
         };
         drop(tx);
         state.absorb();
-        assert_eq!(state.phase.headline(), WORKER_LOST);
+        assert_eq!(state.phase.headline(), CLEANUP_WORKER_LOST);
         assert!(state.removal.is_none());
     }
 }

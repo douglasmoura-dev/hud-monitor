@@ -50,3 +50,33 @@ fn dependency_parser_catches_a_platform_crate() {
     let names = dependency_names("[dependencies]\nslint = \"1\"\n[dev-dependencies]\nx = 1\n");
     assert_eq!(names, vec!["slint"]);
 }
+
+fn production_code(source: &str) -> &str {
+    source.split("#[cfg(test)]").next().unwrap_or(source)
+}
+
+#[test]
+fn core_production_code_never_touches_the_real_system() {
+    let forbidden = [
+        "std::fs",
+        "std::env",
+        "std::net",
+        "std::process",
+        "SystemTime",
+    ];
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(src).expect("read hud-core/src") {
+        let path = entry.expect("dir entry").path();
+        let text = std::fs::read_to_string(&path).expect("read source");
+        for token in forbidden {
+            assert!(
+                !production_code(&text).contains(token),
+                "{} uses `{token}`; real system access belongs behind a port in hud-app",
+                path.display()
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked > 10);
+}
