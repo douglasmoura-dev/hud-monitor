@@ -105,6 +105,30 @@ fn collect_files(
     }
 }
 
+fn files_in(w: &Walker, roots: &[PathBuf], now: u64, min_age: Option<u64>) -> Vec<Item> {
+    let mut items = Vec::new();
+    collect_files(w, roots, now, min_age, &mut items);
+    items
+}
+
+fn browser_cache_items(w: &Walker, profiles_roots: &[PathBuf], now: u64) -> Vec<Item> {
+    let mut flags = Usage::default();
+    let caches = w.browser_cache_dirs(profiles_roots, &mut flags);
+    files_in(w, &caches, now, None)
+}
+
+fn node_modules_items(w: &Walker, projects: &[PathBuf], now: u64) -> Vec<Item> {
+    let mut folders = Vec::new();
+    w.each_old_node_modules(projects, now, &mut |p| folders.push(p.to_path_buf()));
+    folders
+        .into_iter()
+        .map(|path| {
+            let bytes = w.usage(&path, now, None).bytes;
+            Item { path, bytes }
+        })
+        .collect()
+}
+
 fn collect_one(
     w: &Walker,
     system: &dyn SystemProbe,
@@ -112,58 +136,26 @@ fn collect_one(
     id: CategoryId,
     now: u64,
 ) -> Option<Work> {
-    let mut items = Vec::new();
-    match id {
-        CategoryId::Temp => {
-            collect_files(
-                w,
-                roots.temp.as_ref().ok()?,
-                now,
-                Some(TEMP_MIN_AGE_SECS),
-                &mut items,
-            );
-        }
+    let items = match id {
+        CategoryId::Temp => files_in(w, roots.temp.as_ref().ok()?, now, Some(TEMP_MIN_AGE_SECS)),
         CategoryId::RecycleBin => {
             let usage = system.recycle_bin().ok()?;
             return Some(Work::EmptyBin { bytes: usage.bytes });
         }
-        CategoryId::BrowserCache => {
-            let mut flags = Usage::default();
-            let caches = w.browser_cache_dirs(roots.browsers.as_ref().ok()?, &mut flags);
-            collect_files(w, &caches, now, None, &mut items);
-        }
-        CategoryId::NodeModules => {
-            let mut folders = Vec::new();
-            w.each_old_node_modules(roots.projects.as_ref().ok()?, now, &mut |p| {
-                folders.push(p.to_path_buf());
-            });
-            for path in folders {
-                let bytes = w.usage(&path, now, None).bytes;
-                items.push(Item { path, bytes });
-            }
-        }
-        CategoryId::PackageCaches => {
-            collect_files(w, roots.packages.as_ref().ok()?, now, None, &mut items);
-        }
-        CategoryId::WindowsUpdate => {
-            if !system.is_admin() {
-                return None;
-            }
+        CategoryId::BrowserCache => browser_cache_items(w, roots.browsers.as_ref().ok()?, now),
+        CategoryId::NodeModules => node_modules_items(w, roots.projects.as_ref().ok()?, now),
+        CategoryId::PackageCaches => files_in(w, roots.packages.as_ref().ok()?, now, None),
+        CategoryId::WindowsUpdate if system.is_admin() => {
             let dir = roots.windows_update.as_ref().ok()?;
-            collect_files(w, std::slice::from_ref(dir), now, None, &mut items);
+            files_in(w, std::slice::from_ref(dir), now, None)
         }
         CategoryId::OldDownloads => {
             let dir = roots.downloads.as_ref().ok()?;
-            collect_files(
-                w,
-                std::slice::from_ref(dir),
-                now,
-                Some(DOWNLOADS_MIN_AGE_SECS),
-                &mut items,
-            );
+            let min_age = Some(DOWNLOADS_MIN_AGE_SECS);
+            files_in(w, std::slice::from_ref(dir), now, min_age)
         }
-        CategoryId::Docker => return None,
-    }
+        CategoryId::WindowsUpdate | CategoryId::Docker => return None,
+    };
     Some(Work::Items(items))
 }
 
@@ -446,7 +438,7 @@ mod tests {
                 .iter()
                 .map(|p| {
                     if self.locked.contains(p) {
-                        Err("em uso por outro programa".to_owned())
+                        Err("locked by another program".to_owned())
                     } else {
                         self.recycled.borrow_mut().push(p.clone());
                         Ok(())
@@ -622,7 +614,7 @@ mod tests {
         assert_eq!(report.moved_items, 2);
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(report.skipped[0].path, "C:\\t\\locked");
-        assert_eq!(report.skipped[0].reason, "em uso por outro programa");
+        assert_eq!(report.skipped[0].reason, "locked by another program");
         assert!(report.skipped_lines()[0].contains("locked"));
     }
 
@@ -741,7 +733,7 @@ mod tests {
         };
         let lines = report.skipped_lines();
         assert_eq!(lines.len(), SKIPPED_SHOWN + 1);
-        assert_eq!(lines[SKIPPED_SHOWN], "… e mais 2");
+        assert_eq!(lines[SKIPPED_SHOWN], more_skipped(2));
     }
 
     #[test]

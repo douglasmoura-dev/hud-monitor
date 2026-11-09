@@ -187,7 +187,7 @@ mod tests {
     fn cursor_without_source_reports_why() {
         assert_eq!(
             CursorNoSource.get(),
-            Err(ApiError::Other("uso do Cursor indisponível".to_owned()))
+            Err(ApiError::Other(CURSOR_UNAVAILABLE.to_owned()))
         );
     }
 

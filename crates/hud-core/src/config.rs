@@ -339,12 +339,12 @@ mod tests {
         let mut c = Config::first_run(SCREEN);
         c.profiles = vec![
             Profile {
-                name: "Trabalho".into(),
+                name: "Work".into(),
                 items: vec![MiniBarItem::Cpu, MiniBarItem::Ram],
                 orientation: Orientation::Horizontal,
             },
             Profile {
-                name: "Jogo".into(),
+                name: "Game".into(),
                 items: vec![MiniBarItem::Temp, MiniBarItem::Ping, MiniBarItem::Cpu],
                 orientation: Orientation::Vertical,
             },
@@ -389,13 +389,13 @@ mod tests {
     #[test]
     fn switching_profile_applies_saved_items() {
         let mut c = Config::from_toml(&with_profiles().to_toml().unwrap()).unwrap();
-        c.switch_profile("Jogo").unwrap();
+        c.switch_profile("Game").unwrap();
         assert_eq!(
             c.minibar.items,
             [MiniBarItem::Temp, MiniBarItem::Ping, MiniBarItem::Cpu]
         );
         assert_eq!(c.minibar.orientation, Orientation::Vertical);
-        assert_eq!(c.active_profile.as_deref(), Some("Jogo"));
+        assert_eq!(c.active_profile.as_deref(), Some("Game"));
     }
 
     #[test]
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn duplicate_profile_names_are_invalid() {
         let mut c = with_profiles();
-        c.profiles[1].name = "Trabalho".into();
+        c.profiles[1].name = "Work".into();
         assert!(matches!(
             c.validate(),
             Err(ConfigError::Invalid {

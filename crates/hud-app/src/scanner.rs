@@ -128,6 +128,27 @@ fn run_removal(ids: &[CategoryId], tx: &mpsc::Sender<RemovalEvent>, cancel: &Ato
     let _ = tx.send(RemovalEvent::Finished(report));
 }
 
+/// The phase a removal event leads to, and whether it is the last event of the run.
+fn phase_after(event: RemovalEvent) -> (Phase, bool) {
+    match event {
+        RemovalEvent::Progress { done, total } => (Phase::Running { done, total }, false),
+        RemovalEvent::Finished(report) => {
+            let done = Phase::Done {
+                headline: report.message(),
+                lines: report.skipped_lines(),
+            };
+            (done, true)
+        }
+        RemovalEvent::Failed(reason) => {
+            let done = Phase::Done {
+                headline: reason,
+                lines: Vec::new(),
+            };
+            (done, true)
+        }
+    }
+}
+
 /// What the window shows besides the category list.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum Phase {
@@ -230,25 +251,9 @@ impl State {
         let (events, ended) = drain(&run.events);
         let mut finished = false;
         for event in events {
-            match event {
-                RemovalEvent::Progress { done, total } => {
-                    self.phase = Phase::Running { done, total };
-                }
-                RemovalEvent::Finished(report) => {
-                    self.phase = Phase::Done {
-                        headline: report.message(),
-                        lines: report.skipped_lines(),
-                    };
-                    finished = true;
-                }
-                RemovalEvent::Failed(reason) => {
-                    self.phase = Phase::Done {
-                        headline: reason,
-                        lines: Vec::new(),
-                    };
-                    finished = true;
-                }
-            }
+            let (phase, last) = phase_after(event);
+            self.phase = phase;
+            finished |= last;
         }
         if ended && !finished {
             self.phase = Phase::Done {
@@ -385,6 +390,24 @@ fn updater(window: &Scanner, state: &Rc<RefCell<State>>, change: fn(&mut State))
     }
 }
 
+/// Callback body that flips the checkbox of row `i` and redraws.
+fn row_toggler(window: &Scanner, state: &Rc<RefCell<State>>) -> impl Fn(i32) {
+    let (weak, state) = (window.as_weak(), state.clone());
+    move |i| {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let mut s = state.borrow_mut();
+        if let Some(c) = usize::try_from(i)
+            .ok()
+            .and_then(|i| s.categories.get_mut(i))
+        {
+            c.toggle();
+        }
+        refresh(&window, &s);
+    }
+}
+
 fn rescan(s: &mut State) {
     s.release();
     s.start();
@@ -396,20 +419,7 @@ fn new_session(slot: &Slot) -> Result<Session, slint::PlatformError> {
     state.borrow_mut().start();
     refresh(&window, &state.borrow());
 
-    let (weak, st) = (window.as_weak(), state.clone());
-    window.on_toggle(move |i| {
-        let Some(window) = weak.upgrade() else {
-            return;
-        };
-        let mut s = st.borrow_mut();
-        if let Some(c) = usize::try_from(i)
-            .ok()
-            .and_then(|i| s.categories.get_mut(i))
-        {
-            c.toggle();
-        }
-        refresh(&window, &s);
-    });
+    window.on_toggle(row_toggler(&window, &state));
     window.on_rescan(updater(&window, &state, rescan));
     window.on_ask_remove(updater(&window, &state, State::ask_remove));
     window.on_confirm_remove(updater(&window, &state, State::confirm_remove));

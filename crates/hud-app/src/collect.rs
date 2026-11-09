@@ -8,6 +8,7 @@ use hud_core::metrics::{ping_metric, Collector, DayClock, Metric, PingSource, Sn
 use hud_core::sensors::read_sensors;
 use hud_core::ui_text::{collection_unavailable, WAITING_FIRST_PING};
 use std::{
+    path::PathBuf,
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
         Arc, Mutex,
@@ -64,11 +65,16 @@ fn ping_loop(mut source: impl PingSource, slot: &SharedPing, stop: &Receiver<()>
     }
 }
 
+fn open_system() -> Result<(SysinfoSource, PathBuf), String> {
+    let system = SysinfoSource::new().map_err(|e| collection_unavailable(&e.to_string()))?;
+    let dir = store::data_dir().map_err(|e| e.to_string())?;
+    Ok((system, dir))
+}
+
 fn snapshot_loop(tx: &Sender<Snapshot>, ping: &SharedPing, stop: &Receiver<()>) {
-    let (system, dir) = match (SysinfoSource::new(), store::data_dir()) {
-        (Ok(s), Ok(d)) => (s, d),
-        (Err(e), _) => return report_init_failure(tx, &collection_unavailable(&e.to_string())),
-        (_, Err(e)) => return report_init_failure(tx, &e.to_string()),
+    let (system, dir) = match open_system() {
+        Ok(opened) => opened,
+        Err(reason) => return report_init_failure(tx, &reason),
     };
     let start = Instant::now();
     let mut clock = DayClock::new(start.elapsed(), winffi::local_now);

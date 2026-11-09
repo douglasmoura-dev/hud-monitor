@@ -63,6 +63,20 @@ fn circle_icon() -> Result<Icon, ShellError> {
     Icon::from_rgba(rgba, ICON_SIZE, ICON_SIZE).map_err(tray_err)
 }
 
+fn profile_items(
+    profiles: &[Profile],
+    submenu: &Submenu,
+) -> Result<Vec<(MenuItem, String)>, ShellError> {
+    let items: Vec<(MenuItem, String)> = profiles
+        .iter()
+        .map(|p| (MenuItem::new(&p.name, true, None), p.name.clone()))
+        .collect();
+    for (item, _) in &items {
+        submenu.append(item).map_err(tray_err)?;
+    }
+    Ok(items)
+}
+
 impl Tray {
     pub fn new(profiles: &[Profile]) -> Result<Self, ShellError> {
         let show_hud = MenuItem::new(TRAY_SHOW_HUD, true, None);
@@ -70,13 +84,7 @@ impl Tray {
         let scanner = MenuItem::new(TRAY_SCANNER, true, None);
         let quit = MenuItem::new(TRAY_QUIT, true, None);
         let submenu = Submenu::new(TRAY_PROFILES, !profiles.is_empty());
-        let items: Vec<(MenuItem, String)> = profiles
-            .iter()
-            .map(|p| (MenuItem::new(&p.name, true, None), p.name.clone()))
-            .collect();
-        for (item, _) in &items {
-            submenu.append(item).map_err(tray_err)?;
-        }
+        let items = profile_items(profiles, &submenu)?;
         let menu = Menu::new();
         menu.append_items(&[
             &show_hud,

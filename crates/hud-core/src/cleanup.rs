@@ -439,6 +439,27 @@ fn measured_dir(result: &Result<PathBuf, String>, f: impl Fn(&Path) -> Usage) ->
     }
 }
 
+fn recycle_bin_usage(system: &dyn SystemProbe) -> Metric<Usage> {
+    match system.recycle_bin() {
+        Ok(u) => Metric::Available(u),
+        Err(reason) => Metric::Unavailable(reason),
+    }
+}
+
+/// Windows Update downloads can only be measured (and later removed) with admin rights.
+fn windows_update_usage(
+    w: &Walker,
+    system: &dyn SystemProbe,
+    roots: &Roots,
+    now: u64,
+) -> Metric<Usage> {
+    if system.is_admin() {
+        measured_dir(&roots.windows_update, |d| w.usage(d, now, None))
+    } else {
+        Metric::unavailable(NEEDS_ADMIN)
+    }
+}
+
 /// Measures every category and hands each one to `on_category` as soon as it is ready.
 /// Docker is omitted when it is not installed. Returns early when `cancel` is set.
 pub fn scan_all(
@@ -461,13 +482,7 @@ pub fn scan_all(
             w.usage_of_all(p, now, Some(TEMP_MIN_AGE_SECS))
         }),
     );
-    emit(
-        CategoryId::RecycleBin,
-        match system.recycle_bin() {
-            Ok(u) => Metric::Available(u),
-            Err(reason) => Metric::Unavailable(reason),
-        },
-    );
+    emit(CategoryId::RecycleBin, recycle_bin_usage(system));
     emit(
         CategoryId::BrowserCache,
         measured(&roots.browsers, |p| w.browser_caches(p, now)),
@@ -480,12 +495,10 @@ pub fn scan_all(
         CategoryId::PackageCaches,
         measured(&roots.packages, |p| w.usage_of_all(p, now, None)),
     );
-    let update = if system.is_admin() {
-        measured_dir(&roots.windows_update, |d| w.usage(d, now, None))
-    } else {
-        Metric::unavailable(NEEDS_ADMIN)
-    };
-    emit(CategoryId::WindowsUpdate, update);
+    emit(
+        CategoryId::WindowsUpdate,
+        windows_update_usage(&w, system, roots, now),
+    );
     if system.docker_installed() {
         emit(CategoryId::Docker, Metric::unavailable(DOCKER_HINT));
     }
