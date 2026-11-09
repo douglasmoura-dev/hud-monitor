@@ -1,28 +1,37 @@
 //! `sysinfo`-backed source. The `System` is created once; each call refreshes only what it needs.
 
+use crate::winffi::NetCounters;
 use hud_core::metrics::{ProcessMem, SystemSource};
 use std::{
     path::Path,
     time::{Duration, Instant},
 };
 use sysinfo::{
-    CpuRefreshKind, DiskRefreshKind, Disks, MemoryRefreshKind, Networks, ProcessRefreshKind,
+    CpuRefreshKind, DiskRefreshKind, Disks, MemoryRefreshKind, ProcessRefreshKind,
     ProcessesToUpdate, System,
 };
 
-const PROCESS_REFRESH: Duration = Duration::from_secs(5);
+const PROCESS_REFRESH: Duration = Duration::from_secs(10);
 const TOP_PROCESSES: usize = 3;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SourceError {
+    #[error(transparent)]
+    Sysinfo(#[from] sysinfo::Error),
+    #[error("network interfaces could not be listed")]
+    Network,
+}
 
 pub struct SysinfoSource {
     system: System,
     disks: Disks,
-    networks: Networks,
+    net: NetCounters,
     top: Vec<ProcessMem>,
     top_at: Option<Instant>,
 }
 
 impl SysinfoSource {
-    pub fn new() -> Result<Self, sysinfo::Error> {
+    pub fn new() -> Result<Self, SourceError> {
         let mut system = System::new()?;
         system.refresh_cpu_specifics(CpuRefreshKind::everything());
         Ok(Self {
@@ -30,7 +39,7 @@ impl SysinfoSource {
             disks: Disks::new_with_refreshed_list_specifics(
                 DiskRefreshKind::nothing().with_storage(),
             )?,
-            networks: Networks::new_with_refreshed_list()?,
+            net: NetCounters::open().ok_or(SourceError::Network)?,
             top: Vec::new(),
             top_at: None,
         })
@@ -106,13 +115,7 @@ impl SystemSource for SysinfoSource {
     }
 
     fn net_counters(&mut self) -> (u64, u64) {
-        self.networks.refresh(true);
-        self.networks
-            .iter()
-            .filter(|(name, _)| !name.to_string_lossy().to_lowercase().contains("loopback"))
-            .fold((0, 0), |(rx, tx), (_, n)| {
-                (rx + n.total_received(), tx + n.total_transmitted())
-            })
+        self.net.totals()
     }
 }
 

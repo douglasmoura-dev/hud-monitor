@@ -469,8 +469,54 @@ fn close(slot: &Slot) {
     });
 }
 
+#[derive(Debug, PartialEq)]
+enum Step {
+    Open,
+    Close,
+}
+
+/// Tick 0 opens, tick 1 closes, tick 2 opens...; `None` once `cycles` open/close pairs are done.
+fn cycle_step(tick: u32, cycles: u32) -> Option<Step> {
+    match (tick < cycles * 2, tick % 2) {
+        (false, _) => None,
+        (true, 0) => Some(Step::Open),
+        (true, _) => Some(Step::Close),
+    }
+}
+
+/// Test hook for the memory budget (E14): opens and closes the scanner `cycles` times, 1 s apart.
+pub fn stress(slot: &Slot, cycles: u32) -> slint::Timer {
+    let (slot, tick) = (slot.clone(), std::cell::Cell::new(0));
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_secs(1),
+        move || match cycle_step(tick.replace(tick.get() + 1), cycles) {
+            Some(Step::Open) => open(&slot),
+            Some(Step::Close) => close(&slot),
+            None => {}
+        },
+    );
+    timer
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stress_alternates_open_and_close_then_stops() {
+        let steps: Vec<_> = (0..5).map(|t| cycle_step(t, 2)).collect();
+        assert_eq!(
+            steps,
+            [
+                Some(Step::Open),
+                Some(Step::Close),
+                Some(Step::Open),
+                Some(Step::Close),
+                None
+            ]
+        );
+    }
+
     use super::*;
     use hud_core::cleanup::{CategoryId, Usage};
     use hud_core::metrics::Metric;

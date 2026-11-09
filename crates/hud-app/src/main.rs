@@ -26,6 +26,12 @@ enum AppError {
     Window(#[from] slint::PlatformError),
 }
 
+/// `--scanner-cycles N`: opens and closes the scanner N times (memory budget measurement).
+fn scanner_cycles() -> Option<u32> {
+    let mut args = std::env::args().skip_while(|a| a != "--scanner-cycles");
+    args.nth(1)?.parse().ok()
+}
+
 fn run() -> Result<(), AppError> {
     let path = store::default_path()?;
     let (hud, bar) = (Hud::new()?, MiniBar::new()?);
@@ -34,7 +40,7 @@ fn run() -> Result<(), AppError> {
 
     let dashboard = Dashboard::new();
     let waiting = dashboard.waiting_view(&config.minibar.items, &config.thresholds);
-    presentation::show_dashboard(&hud, &bar, &waiting);
+    presentation::show_dashboard(&hud, &bar, None, &waiting);
     hud.set_clock(presentation::clock_text(winffi::local_now().1).into());
     presentation::apply_config(&hud, &bar, &config, screen);
     shell::sync_autostart(config.autostart);
@@ -60,6 +66,7 @@ fn run() -> Result<(), AppError> {
     if std::env::args().any(|a| a == "--scanner") {
         scanner::open(&services.scanner);
     }
+    let _stress = scanner_cycles().map(|n| scanner::stress(&services.scanner, n));
 
     let (snapshots, collection) = collect::spawn();
     let (providers, poller) = ai::spawn();

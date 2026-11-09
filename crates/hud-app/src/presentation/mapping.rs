@@ -88,10 +88,58 @@ fn show_providers(hud: &Hud, v: &DashboardView) {
     hud.set_presence(model(rows));
 }
 
-pub fn show_dashboard(hud: &Hud, minibar: &MiniBar, v: &DashboardView) {
-    show_hud(hud, &v.hud);
-    show_providers(hud, v);
-    minibar.set_chips(chip_model(&v.chips));
+fn providers_changed(prev: &DashboardView, v: &DashboardView) -> bool {
+    (
+        &prev.claude,
+        &prev.codex,
+        &prev.gemini,
+        &prev.cursor,
+        &prev.presence,
+    ) != (&v.claude, &v.codex, &v.gemini, &v.cursor, &v.presence)
+        || (prev.codex_listed, prev.gemini_listed, prev.cursor_listed)
+            != (v.codex_listed, v.gemini_listed, v.cursor_listed)
+}
+
+/// Which screens need new property values: everything on the first view, else only what differs.
+#[derive(Debug, PartialEq)]
+struct Changes {
+    hud: bool,
+    providers: bool,
+    chips: bool,
+}
+
+fn changes(prev: Option<&DashboardView>, v: &DashboardView) -> Changes {
+    match prev {
+        None => Changes {
+            hud: true,
+            providers: true,
+            chips: true,
+        },
+        Some(prev) => Changes {
+            hud: prev.hud != v.hud,
+            providers: providers_changed(prev, v),
+            chips: prev.chips != v.chips,
+        },
+    }
+}
+
+/// Pushes `v` to the windows, skipping every part equal to `prev` so unchanged ticks repaint nothing.
+pub fn show_dashboard(
+    hud: &Hud,
+    minibar: &MiniBar,
+    prev: Option<&DashboardView>,
+    v: &DashboardView,
+) {
+    let todo = changes(prev, v);
+    if todo.hud {
+        show_hud(hud, &v.hud);
+    }
+    if todo.providers {
+        show_providers(hud, v);
+    }
+    if todo.chips {
+        minibar.set_chips(chip_model(&v.chips));
+    }
 }
 
 /// `HH:MM` from seconds since local midnight.
@@ -137,6 +185,44 @@ mod tests {
             percent: 12.5,
         });
         assert_eq!((l.reset.as_str(), l.percent), ("1h48", 12.5));
+    }
+
+    fn view() -> DashboardView {
+        let d = hud_core::dashboard::Dashboard::new();
+        let t = hud_core::config::Config::first_run(hud_core::position::Size {
+            width: 1920,
+            height: 1080,
+        })
+        .thresholds;
+        d.waiting_view(&[hud_core::config::MiniBarItem::Cpu], &t)
+    }
+
+    #[test]
+    fn first_view_updates_everything_and_identical_view_nothing() {
+        let v = view();
+        let all = Changes {
+            hud: true,
+            providers: true,
+            chips: true,
+        };
+        assert_eq!(changes(None, &v), all);
+        let none = Changes {
+            hud: false,
+            providers: false,
+            chips: false,
+        };
+        assert_eq!(changes(Some(&v), &v.clone()), none);
+    }
+
+    #[test]
+    fn only_the_changed_part_is_updated() {
+        let (a, mut b) = (view(), view());
+        b.hud.ping.text = "12 ms".into();
+        let c = changes(Some(&a), &b);
+        assert_eq!((c.hud, c.providers, c.chips), (true, false, false));
+        let mut b = view();
+        b.codex_listed = !b.codex_listed;
+        assert!(changes(Some(&a), &b).providers);
     }
 
     #[test]
