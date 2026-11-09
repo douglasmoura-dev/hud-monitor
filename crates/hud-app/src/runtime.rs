@@ -1,4 +1,4 @@
-//! The two UI-thread timers: a 1 Hz refresh of the dashboard and a 100 ms poll of tray and
+//! The two UI-thread timers: a 1 Hz refresh of the dashboard and a 200 ms poll of tray and
 //! hotkey events. Both only wire inputs to use cases and the presentation.
 
 use crate::clock::unix_now;
@@ -6,12 +6,12 @@ use crate::presentation::{clock_text, show_dashboard, Controller, Looks, SlintWi
 use crate::scanner;
 use crate::shell::{Hotkeys, Tray, TrayAction};
 use crate::winffi;
-use hud_core::dashboard::{Dashboard, ProviderStates};
+use hud_core::dashboard::{Dashboard, DashboardView, ProviderStates};
 use hud_core::metrics::Snapshot;
 use std::{cell::Cell, rc::Rc, sync::mpsc::Receiver, time::Duration};
 
 const SLOW_TICK: Duration = Duration::from_secs(1);
-const FAST_TICK: Duration = Duration::from_millis(100);
+const FAST_TICK: Duration = Duration::from_millis(200);
 
 /// Everything both timers share.
 pub struct Services {
@@ -31,6 +31,7 @@ struct SlowTick {
     services: Rc<Services>,
     feeds: Feeds,
     dashboard: Dashboard,
+    shown: Option<DashboardView>,
 }
 
 impl SlowTick {
@@ -49,13 +50,14 @@ impl SlowTick {
             let refresh = self
                 .dashboard
                 .refresh(&snapshot, fresh, &items, &thresholds, now);
-            show_dashboard(&hud, &bar, &refresh.view);
+            show_dashboard(&hud, &bar, self.shown.as_ref(), &refresh.view);
             if let Some(tray) = self.services.tray.as_ref() {
                 tray.set_tooltip(&refresh.view.tray_tooltip);
             }
             if refresh.escalate {
                 self.services.controller.escalate();
             }
+            self.shown = Some(refresh.view);
         }
         self.services
             .looks
@@ -69,6 +71,7 @@ pub fn start_slow(services: Rc<Services>, feeds: Feeds, dashboard: Dashboard) ->
         services,
         feeds,
         dashboard,
+        shown: None,
     };
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, SLOW_TICK, move || tick.run());
@@ -86,7 +89,7 @@ fn dispatch(services: &Services, action: TrayAction) {
     }
 }
 
-/// 100 ms: drains tray and hotkey events and reacts when Ctrl changes.
+/// 200 ms: drains tray and hotkey events and reacts when Ctrl changes.
 pub fn start_fast(
     services: Rc<Services>,
     hotkeys: Option<Hotkeys>,

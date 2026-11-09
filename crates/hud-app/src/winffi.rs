@@ -9,12 +9,15 @@ use hud_core::ui_text::{
 };
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::NetworkManagement::IpHelper::{
-    IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho, ICMP_ECHO_REPLY,
+    FreeMibTable, GetIfEntry2, GetIfTable2, IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho,
+    ICMP_ECHO_REPLY, MIB_IF_ROW2, MIB_IF_TABLE2,
 };
+use windows::Win32::NetworkManagement::Ndis::{MediaConnectStateDisconnected, NET_LUID_LH};
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, IBindCtx, CLSCTX_ALL,
@@ -47,6 +50,8 @@ const PDH_OK: u32 = 0;
 const PDH_MORE_DATA: u32 = 0x800007D2;
 const INTEL_VENDOR_ID: u32 = 0x8086;
 const ICMP_REPLY_WORDS: usize = 32;
+const IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
+const NET_LIST_REFRESH: Duration = Duration::from_secs(30);
 
 /// Primary monitor size in physical pixels.
 pub fn screen_size() -> Size {
@@ -569,5 +574,95 @@ mod tests {
         let (d, secs) = super::local_now();
         assert!(secs < 86_400);
         assert!(d.year >= 2024 && (1..=12).contains(&d.month) && (1..=31).contains(&d.day));
+    }
+}
+
+/// Byte counters of the physical network interfaces. The interface list (one `GetIfTable2`) is
+/// rebuilt every 30 s; each sample then reads only those rows with `GetIfEntry2`.
+pub struct NetCounters {
+    luids: Vec<NET_LUID_LH>,
+    listed_at: Instant,
+}
+
+impl NetCounters {
+    /// `None` when the interface table cannot be read.
+    pub fn open() -> Option<Self> {
+        Some(Self {
+            luids: list_physical_interfaces()?,
+            listed_at: Instant::now(),
+        })
+    }
+
+    /// `(received, sent)` bytes since boot, summed over the physical interfaces.
+    pub fn totals(&mut self) -> (u64, u64) {
+        if self.listed_at.elapsed() >= NET_LIST_REFRESH {
+            if let Some(luids) = list_physical_interfaces() {
+                self.luids = luids;
+            }
+            self.listed_at = Instant::now();
+        }
+        self.luids.iter().fold((0, 0), |(rx, tx), luid| {
+            let mut row = MIB_IF_ROW2 {
+                InterfaceLuid: *luid,
+                ..Default::default()
+            };
+            // SAFETY: `row` is a live, initialised local; GetIfEntry2 only writes into it.
+            let read = unsafe { GetIfEntry2(&mut row) };
+            if read.is_ok() {
+                (rx + row.InOctets, tx + row.OutOctets)
+            } else {
+                (rx, tx)
+            }
+        })
+    }
+}
+
+/// Connected hardware interfaces: a link speed, a MAC, not loopback, and alone on its interface
+/// GUID (software layers stacked on one adapter share the GUID and would count its bytes twice).
+fn list_physical_interfaces() -> Option<Vec<NET_LUID_LH>> {
+    let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+    // SAFETY: on success `table` points to a table of `NumEntries` rows that stays valid until
+    // FreeMibTable, which is called exactly once below after the rows are copied out.
+    unsafe {
+        if GetIfTable2(&mut table).is_err() || table.is_null() {
+            return None;
+        }
+        let rows =
+            std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
+        let hardware: Vec<&MIB_IF_ROW2> = rows
+            .iter()
+            .filter(|r| {
+                (r.TransmitLinkSpeed != 0 || r.ReceiveLinkSpeed != 0)
+                    && r.MediaConnectState != MediaConnectStateDisconnected
+                    && r.PhysicalAddressLength != 0
+                    && r.Type != IF_TYPE_SOFTWARE_LOOPBACK
+            })
+            .collect();
+        let luids = hardware
+            .iter()
+            .filter(|r| {
+                hardware
+                    .iter()
+                    .filter(|o| o.InterfaceGuid == r.InterfaceGuid)
+                    .count()
+                    == 1
+            })
+            .map(|r| r.InterfaceLuid)
+            .collect();
+        FreeMibTable(table.cast());
+        Some(luids)
+    }
+}
+
+#[cfg(test)]
+mod net_tests {
+    use super::*;
+
+    #[test]
+    fn counters_open_and_never_decrease() {
+        let mut net = NetCounters::open().expect("interface table readable");
+        let first = net.totals();
+        let second = net.totals();
+        assert!(second.0 >= first.0 && second.1 >= first.1);
     }
 }

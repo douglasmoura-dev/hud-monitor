@@ -59,12 +59,22 @@ impl ThermalSource for PdhThermal {
     }
 }
 
+/// Counter path limited to the engines of one adapter, so PDH does not enumerate every process.
+fn intel_engine_path(luid: &str) -> String {
+    format!(
+        r"\GPU Engine(*{}*)\Utilization Percentage",
+        luid.to_ascii_lowercase()
+    )
+}
+
 pub struct PdhIntelGpu(Option<(CounterArray, String)>);
 
 impl PdhIntelGpu {
     pub fn new() -> Self {
-        let counters = CounterArray::open(r"\GPU Engine(*)\Utilization Percentage");
-        Self(counters.zip(intel_adapter_luid()))
+        Self(intel_adapter_luid().and_then(|luid| {
+            let path = intel_engine_path(&luid);
+            CounterArray::open(&path).map(|counters| (counters, luid))
+        }))
     }
 }
 
@@ -101,5 +111,29 @@ impl NvidiaSource for NvmlSource {
             vram,
             temp_c,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_path_is_limited_to_the_adapter() {
+        assert_eq!(
+            intel_engine_path("luid_0x00000000_0x0000D0A5"),
+            r"\GPU Engine(*luid_0x00000000_0x0000d0a5*)\Utilization Percentage"
+        );
+    }
+
+    #[test]
+    fn narrowed_counter_still_reads_the_intel_adapter_when_present() {
+        let Some(luid) = intel_adapter_luid() else {
+            return;
+        };
+        let mut gpu = PdhIntelGpu::new();
+        assert!(gpu.0.as_ref().is_some_and(|(_, l)| *l == luid));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert!(gpu.usage_percent().is_some());
     }
 }

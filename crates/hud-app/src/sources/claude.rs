@@ -1,16 +1,18 @@
 //! Real Claude sources: the credentials file (read-only), the usage endpoint and the transcript scan.
 
 use hud_core::ai::{
-    log_cutoff, tally_line, AiError, ApiError, CodexUsageApi, CredentialsSource, Secret, TokenSums,
-    TranscriptScanner, UsageApi,
+    log_cutoff, parse_usage_line, AiError, ApiError, CodexUsageApi, CredentialsSource, Secret,
+    TokenSums, TranscriptScanner, UsageApi, UsageEntry,
 };
 use hud_core::ui_text::{
     no_connection, ANTHROPIC_WITH_ARTICLE, CHATGPT_WITH_ARTICLE, UNREADABLE_RESPONSE,
 };
 use std::{
+    collections::HashMap,
     fs::{self, File},
-    io::{BufRead, BufReader, ErrorKind, Read},
+    io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    sync::Mutex,
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -108,14 +110,27 @@ fn read_body(r: ureq::Response) -> Result<String, ApiError> {
     Ok(body)
 }
 
-/// Streams `~/.claude/projects/**/*.jsonl` line by line, skipping files older than 7 days.
+/// What was already read of one transcript: the byte offset after its last complete line and
+/// the usage lines of the 7 d window found before it.
+#[derive(Default)]
+struct FileProgress {
+    offset: u64,
+    entries: Vec<UsageEntry>,
+}
+
+/// Reads `~/.claude/projects/**/*.jsonl` (files modified within 7 days). Each poll reads only
+/// the bytes appended since the previous one, so a large history is parsed once.
 pub struct JsonlScanner {
     root: PathBuf,
+    progress: Mutex<HashMap<PathBuf, FileProgress>>,
 }
 
 impl JsonlScanner {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            progress: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn default_root(home: &Path) -> PathBuf {
@@ -125,7 +140,11 @@ impl JsonlScanner {
 
 impl TranscriptScanner for JsonlScanner {
     fn sums(&self, now: i64) -> Result<TokenSums, AiError> {
-        let mut sums = TokenSums::default();
+        let mut seen: HashMap<PathBuf, FileProgress> = HashMap::new();
+        let mut known = self
+            .progress
+            .lock()
+            .map_err(|_| AiError::Logs("scan state poisoned".to_owned()))?;
         let mut dirs = vec![self.root.clone()];
         let mut line = Vec::new();
         while let Some(dir) = dirs.pop() {
@@ -138,42 +157,80 @@ impl TranscriptScanner for JsonlScanner {
                 let path = entry.path();
                 match entry.file_type() {
                     Ok(t) if t.is_dir() => dirs.push(path),
-                    Ok(t) if t.is_file() && is_recent_jsonl(&path, now) => {
-                        scan_file(&path, now, &mut sums, &mut line);
+                    Ok(t) if t.is_file() => {
+                        let Ok(meta) = entry.metadata() else {
+                            continue;
+                        };
+                        if is_recent_jsonl(&path, &meta, now) {
+                            let mut progress = known.remove(&path).unwrap_or_default();
+                            read_new_lines(&path, meta.len(), now, &mut progress, &mut line);
+                            seen.insert(path, progress);
+                        }
                     }
                     _ => {}
                 }
             }
         }
+        *known = seen;
+        let mut sums = TokenSums::default();
+        for entry in known.values().flat_map(|p| &p.entries) {
+            sums.add(*entry, now);
+        }
         Ok(sums)
     }
 }
 
-fn is_recent_jsonl(path: &Path, now: i64) -> bool {
+fn is_recent_jsonl(path: &Path, meta: &fs::Metadata, now: i64) -> bool {
     if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
         return false;
     }
-    let modified = fs::metadata(path)
-        .and_then(|m| m.modified())
+    let modified = meta
+        .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .and_then(|d| i64::try_from(d.as_secs()).ok());
     modified.is_some_and(|m| m >= log_cutoff(now))
 }
 
-/// One reused byte buffer keeps memory flat; unreadable files and non-UTF-8 lines are skipped.
-fn scan_file(path: &Path, now: i64, sums: &mut TokenSums, line: &mut Vec<u8>) {
-    let Ok(file) = File::open(path) else {
+/// Parses the complete lines after `progress.offset` of a file now `len` bytes long (a shorter file restarts from zero) and
+/// forgets entries that left the 7 d window. One reused byte buffer keeps memory flat;
+/// unreadable files and non-UTF-8 lines are skipped.
+fn read_new_lines(
+    path: &Path,
+    len: u64,
+    now: i64,
+    progress: &mut FileProgress,
+    line: &mut Vec<u8>,
+) {
+    if len < progress.offset {
+        *progress = FileProgress::default();
+    }
+    progress.entries.retain(|e| e.timestamp >= log_cutoff(now));
+    if len == progress.offset {
+        return;
+    }
+    let Ok(mut file) = File::open(path) else {
         return;
     };
+    if file.seek(SeekFrom::Start(progress.offset)).is_err() {
+        return;
+    }
     let mut reader = BufReader::new(file);
     loop {
         line.clear();
         match reader.read_until(b'\n', line) {
             Ok(0) | Err(_) => break,
-            Ok(_) => {
-                if let Ok(text) = std::str::from_utf8(line) {
-                    tally_line(sums, text, now);
+            Ok(n) => {
+                if line.last() != Some(&b'\n') {
+                    break;
+                }
+                progress.offset += n as u64;
+                if let Some(entry) = std::str::from_utf8(line)
+                    .ok()
+                    .and_then(parse_usage_line)
+                    .filter(|e| e.timestamp >= log_cutoff(now))
+                {
+                    progress.entries.push(entry);
                 }
             }
         }
@@ -237,6 +294,30 @@ mod tests {
         set_age_days(&dir.join("stale.jsonl"), 8);
         let sums = JsonlScanner::new(dir.clone()).sums(NOW).unwrap();
         assert_eq!((sums.five_hour, sums.seven_day), (1150, 1180));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    const LINE: &str = "{\"timestamp\":\"2026-11-07T15:00:00Z\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}";
+
+    #[test]
+    fn scanner_reads_only_appended_lines_and_waits_for_complete_ones() {
+        let dir = scratch("incremental");
+        let file = dir.join("s.jsonl");
+        let scanner = JsonlScanner::new(dir.clone());
+        let write = |text: String| {
+            fs::write(&file, text).unwrap();
+            set_age_days(&file, 0);
+        };
+        write(format!("{LINE}\n"));
+        assert_eq!(scanner.sums(NOW).unwrap().seven_day, 15);
+        write(format!("{LINE}\n{LINE}"));
+        assert_eq!(scanner.sums(NOW).unwrap().seven_day, 15);
+        write(format!("{LINE}\n{LINE}\n"));
+        assert_eq!(scanner.sums(NOW).unwrap().seven_day, 30);
+        write(format!("{LINE}\n"));
+        assert_eq!(scanner.sums(NOW).unwrap().seven_day, 15);
+        fs::remove_file(&file).unwrap();
+        assert_eq!(scanner.sums(NOW).unwrap(), TokenSums::default());
         fs::remove_dir_all(dir).unwrap();
     }
 

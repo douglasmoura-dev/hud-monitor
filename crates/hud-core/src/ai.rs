@@ -253,23 +253,41 @@ struct Usage {
 /// Cache reads are not counted: they repeat the same context on every turn.
 // ponytail: no per-message de-duplication, so streaming repeats can overcount; the `~` marks it.
 pub fn tally_line(sums: &mut TokenSums, line: &str, now: i64) {
+    if let Some(entry) = parse_usage_line(line) {
+        sums.add(entry, now);
+    }
+}
+
+/// Tokens one transcript line spent, and when.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsageEntry {
+    pub timestamp: i64,
+    pub tokens: u64,
+}
+
+pub fn parse_usage_line(line: &str) -> Option<UsageEntry> {
     if !line.contains("\"usage\"") {
-        return;
+        return None;
     }
-    let Ok(parsed) = serde_json::from_str::<LogLine>(line) else {
-        return;
-    };
-    let Some(ts) = parse_rfc3339(&parsed.timestamp) else {
-        return;
-    };
-    let age = now - ts;
+    let parsed = serde_json::from_str::<LogLine>(line).ok()?;
+    let timestamp = parse_rfc3339(&parsed.timestamp)?;
     let u = parsed.message.usage;
-    let tokens = u.input_tokens + u.output_tokens + u.cache_creation_input_tokens;
-    if (0..=FIVE_HOURS).contains(&age) {
-        sums.five_hour += tokens;
-    }
-    if (0..=SEVEN_DAYS).contains(&age) {
-        sums.seven_day += tokens;
+    Some(UsageEntry {
+        timestamp,
+        tokens: u.input_tokens + u.output_tokens + u.cache_creation_input_tokens,
+    })
+}
+
+impl TokenSums {
+    /// Counts `entry` in the windows that still contain it at `now`.
+    pub fn add(&mut self, entry: UsageEntry, now: i64) {
+        let age = now - entry.timestamp;
+        if (0..=FIVE_HOURS).contains(&age) {
+            self.five_hour += entry.tokens;
+        }
+        if (0..=SEVEN_DAYS).contains(&age) {
+            self.seven_day += entry.tokens;
+        }
     }
 }
 
