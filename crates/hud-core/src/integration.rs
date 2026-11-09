@@ -2,6 +2,7 @@
 
 use crate::appearance::acrylic_tint;
 use crate::config::Hotkeys;
+use crate::ui_text::{hotkeys_unavailable, tray_unavailable};
 use std::path::Path;
 
 pub const AUTOSTART_VALUE: &str = "hud-monitor";
@@ -66,10 +67,10 @@ pub fn shell_notice(
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(e) = tray_error {
-        parts.push(format!("bandeja indisponível: {e}"));
+        parts.push(tray_unavailable(e));
     }
     if let Some(e) = hotkeys_error {
-        parts.push(format!("atalhos indisponíveis: {e}"));
+        parts.push(hotkeys_unavailable(e));
     }
     parts.extend(hotkey_warnings.iter().cloned());
     parts.join(" · ")
@@ -161,10 +162,12 @@ mod tests {
     fn notice_names_each_failed_feature_and_is_empty_when_all_works() {
         assert_eq!(shell_notice(None, None, &[]), "");
         let warnings = register_hotkeys(&mut FakeHotkeys("Ctrl+Alt+H"), &hotkeys());
-        let n = shell_notice(Some("sem bandeja"), Some("já em uso"), &warnings);
-        assert!(
-            n.starts_with("bandeja indisponível: sem bandeja · atalhos indisponíveis: já em uso")
-        );
+        let n = shell_notice(Some("no tray"), Some("already taken"), &warnings);
+        assert!(n.starts_with(&format!(
+            "{} · {}",
+            tray_unavailable("no tray"),
+            hotkeys_unavailable("already taken")
+        )));
         assert!(n.contains("Ctrl+Alt+H"));
     }
 

@@ -13,6 +13,10 @@ use crate::cleanup::{
     TEMP_MIN_AGE_SECS,
 };
 use crate::format;
+use crate::ui_text::{
+    freed, items_moved_to_bin, more_skipped, skipped_count, BIN_EMPTIED, INTERRUPTED,
+    NO_SYSTEM_ANSWER, RECYCLE_BIN_NAME,
+};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -203,21 +207,21 @@ pub struct Report {
 }
 
 impl Report {
-    /// "Liberados 1.2 GB" plus what was skipped; the amount is what really moved.
+    /// The freed-space line plus what was skipped; the amount is what really moved.
     pub fn message(&self) -> String {
-        let mut text = format!("Liberados {}", format::size(self.freed_bytes));
+        let mut text = freed(&format::size(self.freed_bytes));
         let mut parts = Vec::new();
         if self.moved_items > 0 {
-            parts.push(format!("{} itens movidos para a Lixeira", self.moved_items));
+            parts.push(items_moved_to_bin(self.moved_items));
         }
         if self.emptied_bin {
-            parts.push("Lixeira esvaziada".to_owned());
+            parts.push(BIN_EMPTIED.to_owned());
         }
         if !self.skipped.is_empty() {
-            parts.push(format!("{} não foi possível mover", self.skipped.len()));
+            parts.push(skipped_count(self.skipped.len()));
         }
         if self.cancelled {
-            parts.push("interrompido".to_owned());
+            parts.push(INTERRUPTED.to_owned());
         }
         if !parts.is_empty() {
             text.push_str(" (");
@@ -227,7 +231,7 @@ impl Report {
         text
     }
 
-    /// The first skipped items as `"path — reason"`, for the "não foi possível mover" list.
+    /// The first skipped items as `"path — reason"`, for the "could not move" list.
     pub fn skipped_lines(&self) -> Vec<String> {
         let mut lines: Vec<String> = self
             .skipped
@@ -236,7 +240,7 @@ impl Report {
             .map(|s| format!("{} — {}", s.path, s.reason))
             .collect();
         if self.skipped.len() > SKIPPED_SHOWN {
-            lines.push(format!("… e mais {}", self.skipped.len() - SKIPPED_SHOWN));
+            lines.push(more_skipped(self.skipped.len() - SKIPPED_SHOWN));
         }
         lines
     }
@@ -264,9 +268,7 @@ fn recycle_items(
                     report.freed_bytes += item.bytes;
                 }
                 Some(Err(reason)) => report.skipped.push(skip(&item.path, reason)),
-                None => report
-                    .skipped
-                    .push(skip(&item.path, "sem resposta do sistema")),
+                None => report.skipped.push(skip(&item.path, NO_SYSTEM_ANSWER)),
             }
         }
         *done += batch.len();
@@ -305,7 +307,9 @@ pub fn execute(
                             report.emptied_bin = true;
                             report.freed_bytes += bytes;
                         }
-                        Err(reason) => report.skipped.push(skip(Path::new("Lixeira"), &reason)),
+                        Err(reason) => report
+                            .skipped
+                            .push(skip(Path::new(RECYCLE_BIN_NAME), &reason)),
                     }
                     done += 1;
                     on_progress(done);
@@ -321,6 +325,7 @@ mod tests {
     use super::*;
     use crate::cleanup::{Entry, EntryKind, ScanError, DAY_SECS};
     use crate::metrics::Metric;
+    use crate::ui_text::category;
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -578,7 +583,7 @@ mod tests {
         );
         let lines = confirmation_lines(&cats);
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("Temporários — "));
+        assert!(lines[0].starts_with(&format!("{} — ", category::TEMP)));
         let docker_forced = [category(CategoryId::Docker, true, true)];
         assert!(selected_ids(&docker_forced).is_empty());
     }
@@ -598,7 +603,7 @@ mod tests {
         assert!(report.skipped.is_empty());
         assert_eq!(
             report.message(),
-            "Liberados 300 B (3 itens movidos para a Lixeira)"
+            format!("{} ({})", freed("300 B"), items_moved_to_bin(3))
         );
     }
 
@@ -633,8 +638,8 @@ mod tests {
         };
         let report = run(&plan, &recycler);
         assert_eq!(report.freed_bytes, 100);
-        assert!(report.message().starts_with("Liberados 100 B"));
-        assert!(report.message().contains("1 não foi possível mover"));
+        assert!(report.message().starts_with(&freed("100 B")));
+        assert!(report.message().contains(&skipped_count(1)));
     }
 
     #[test]
@@ -682,7 +687,10 @@ mod tests {
         let report = run(&plan, &recycler);
         assert_eq!(*recycler.bin_emptied.borrow(), 1);
         assert_eq!(report.freed_bytes, 2048);
-        assert_eq!(report.message(), "Liberados 2.0 KB (Lixeira esvaziada)");
+        assert_eq!(
+            report.message(),
+            format!("{} ({BIN_EMPTIED})", freed("2.0 KB"))
+        );
     }
 
     #[test]

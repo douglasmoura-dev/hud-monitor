@@ -10,4 +10,5 @@ pub mod metrics;
 pub mod position;
 pub mod removal;
 pub mod sensors;
+pub mod ui_text;
 pub mod view;

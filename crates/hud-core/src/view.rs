@@ -6,6 +6,7 @@ use crate::config::{MiniBarItem, Orientation, Threshold, Thresholds};
 use crate::format::{rate, size, used_total_gb};
 use crate::metrics::{CpuMetrics, Metric, Snapshot};
 use crate::position::Size;
+use crate::ui_text::{cores_above_half, net_today, CODEX_NOT_FOUND, DISK_CHIP_LABEL, NO_PROCESSES};
 
 pub const DASH: &str = "—";
 pub const BAR_RED: u32 = 0x00E2_4B4A;
@@ -13,7 +14,6 @@ pub const BAR_GREEN: u32 = 0x001D_9E75;
 pub const ALERT_WARN: u32 = 0x00EF_9F27;
 pub const ALERT_CRIT: u32 = BAR_RED;
 const HOT_THREAD_PERCENT: f32 = 80.0;
-const NO_PROCESSES: &str = "processos indisponíveis";
 
 /// Text shown in the HUD and the tooltip explaining why it is `—` (empty when available).
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -107,10 +107,7 @@ pub fn build_alerted(s: &Snapshot, t: &Thresholds) -> HudView {
 
 fn core_label(cpu: &CpuMetrics) -> Field {
     let threads = cpu.threads.len();
-    let above = match cpu.above_50 {
-        1 => "1 núcleo acima de 50%".to_string(),
-        n => format!("{n} núcleos acima de 50%"),
-    };
+    let above = cores_above_half(cpu.above_50);
     match &cpu.cores {
         Metric::Available(c) => Field::ok(format!("{c}C/{threads}T · {above}")),
         Metric::Unavailable(reason) => Field {
@@ -202,7 +199,7 @@ pub fn build(s: &Snapshot) -> HudView {
         }),
         net_down: Field::ok(rate(s.net.down)),
         net_up: Field::ok(rate(s.net.up)),
-        net_today: Field::of(&s.net.day_total, |&b| format!("hoje {}", size(b))),
+        net_today: Field::of(&s.net.day_total, |&b| net_today(&size(b))),
         ping: Field::of(&s.ping_ms, |ms| format!("{ms} ms")),
     }
 }
@@ -269,7 +266,7 @@ pub fn codex_view(state: &ClaudeState, now: i64) -> ClaudeView {
 
 /// The Codex row is hidden only when `auth.json` is missing; any other failure shows `—`.
 pub fn codex_listed(state: &ClaudeState) -> bool {
-    !matches!(state, Metric::Unavailable(r) if r == crate::ai::CODEX_NOT_FOUND)
+    !matches!(state, Metric::Unavailable(r) if r == CODEX_NOT_FOUND)
 }
 
 fn provider_view(state: &ClaudeState, now: i64, five_threshold: Option<Threshold>) -> ClaudeView {
@@ -317,7 +314,7 @@ fn chip_label(item: MiniBarItem) -> &'static str {
         MiniBarItem::Temp => "TEMP",
         MiniBarItem::Ping => "PING",
         MiniBarItem::Gpu => "GPU",
-        MiniBarItem::Disk => "DISCO",
+        MiniBarItem::Disk => DISK_CHIP_LABEL,
         MiniBarItem::Claude5h => "5H",
         MiniBarItem::Claude7d => "7D",
         MiniBarItem::Codex5h => "CX5H",
@@ -413,6 +410,9 @@ mod tests {
     use crate::format::GIB;
     use crate::metrics::{DiskMetrics, MemMetrics, NetMetrics, ProcessMem};
     use crate::sensors::Sensors;
+    use crate::ui_text::{
+        CLAUDE_NOT_FOUND, CLAUDE_RENEW_LOGIN_TIP, CODEX_RENEW_LOGIN_TIP, DISK_IO_UNAVAILABLE,
+    };
 
     const NOW: i64 = 1_794_066_960;
 
@@ -436,12 +436,12 @@ mod tests {
             plan: None,
             five_hour: Reading::Estimate { tokens: five },
             seven_day: Reading::Estimate { tokens: seven },
-            tip: "abra o Claude Code para renovar o login".into(),
+            tip: CLAUDE_RENEW_LOGIN_TIP.into(),
         })
     }
 
     fn snapshot(threads: Vec<f32>) -> Snapshot {
-        let sensors = Sensors::unavailable("sem sensor");
+        let sensors = Sensors::unavailable("no sensor");
         let above_50 = threads.iter().filter(|t| **t > 50.0).count();
         Snapshot {
             cpu: CpuMetrics {
@@ -462,7 +462,7 @@ mod tests {
             },
             disk: DiskMetrics {
                 usage: Metric::Available((50 * GIB, 200 * GIB)),
-                io: Metric::unavailable("contador indisponível"),
+                io: Metric::unavailable(DISK_IO_UNAVAILABLE),
             },
             net: NetMetrics {
                 down: 4_404_019,
@@ -511,7 +511,7 @@ mod tests {
     fn four_threads_give_four_bars_and_core_label() {
         let v = build(&snapshot(vec![10.0, 60.0, 20.0, 90.0]));
         assert_eq!(v.core_bars.len(), 4);
-        assert_eq!(v.cpu_cores.text, "2C/4T · 2 núcleos acima de 50%");
+        assert_eq!(v.cpu_cores.text, format!("2C/4T · {}", cores_above_half(2)));
     }
 
     #[test]
@@ -526,9 +526,9 @@ mod tests {
     fn unavailable_metric_shows_dash_with_reason_tooltip() {
         let v = build(&snapshot(vec![10.0]));
         assert_eq!(v.cpu_temp.text, "—");
-        assert_eq!(v.cpu_temp.tip, "sem sensor");
+        assert_eq!(v.cpu_temp.tip, "no sensor");
         assert_eq!(v.disk_io.text, "—");
-        assert_eq!(v.disk_io.tip, "contador indisponível");
+        assert_eq!(v.disk_io.tip, DISK_IO_UNAVAILABLE);
         assert_eq!(v.cpu_freq.text, "3.4GHz");
         assert!(v.cpu_freq.tip.is_empty());
     }
@@ -548,17 +548,17 @@ mod tests {
         assert_eq!(v.disk_percent, 25.0);
         assert_eq!(v.net_down.text, "4.2 MB/s");
         assert_eq!(v.net_up.text, "320 KB/s");
-        assert_eq!(v.net_today.text, "hoje 3.1 GB");
+        assert_eq!(v.net_today.text, net_today("3.1 GB"));
         assert_eq!(v.ping.text, "12 ms");
     }
 
     #[test]
     fn unknown_core_count_keeps_thread_count_and_explains() {
         let mut s = snapshot(vec![60.0]);
-        s.cpu.cores = Metric::unavailable("sem contagem");
+        s.cpu.cores = Metric::unavailable("no core count");
         let v = build(&s);
-        assert_eq!(v.cpu_cores.text, "—/1T · 1 núcleo acima de 50%");
-        assert_eq!(v.cpu_cores.tip, "sem contagem");
+        assert_eq!(v.cpu_cores.text, format!("—/1T · {}", cores_above_half(1)));
+        assert_eq!(v.cpu_cores.tip, "no core count");
     }
 
     #[test]
@@ -584,7 +584,7 @@ mod tests {
             &[Cpu, Ram, Net, Claude5h],
             &snapshot(vec![10.0]),
             &thresholds(),
-            &claude_view(&Metric::unavailable("sem login"), NOW, &thresholds()),
+            &claude_view(&Metric::unavailable("no login"), NOW, &thresholds()),
             &ClaudeView::default(),
         );
         let labels: Vec<_> = chips.iter().map(|c| c.label).collect();
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!(chips[1].value.text, "50%");
         assert_eq!(chips[2].value.text, "4.2 MB/s");
         assert_eq!(chips[3].value.text, "—");
-        assert_eq!(chips[3].value.tip, "sem login");
+        assert_eq!(chips[3].value.tip, "no login");
     }
 
     #[test]
@@ -640,7 +640,7 @@ mod tests {
         let v = claude_view(&estimate(1_200_000, 480_000), NOW, &thresholds());
         assert_eq!(v.five.pct.text, "~1.2M tok");
         assert_eq!(v.week.pct.text, "~480.0k tok");
-        assert_eq!(v.five.pct.tip, "abra o Claude Code para renovar o login");
+        assert_eq!(v.five.pct.tip, CLAUDE_RENEW_LOGIN_TIP);
         assert_eq!((v.five.percent, v.five.reset.as_str()), (0.0, ""));
         assert_eq!(v.five.pct.level, Level::Ok);
     }
@@ -681,14 +681,10 @@ mod tests {
 
     #[test]
     fn unavailable_claude_is_dash_with_reason_and_no_badge() {
-        let v = claude_view(
-            &Metric::unavailable("Claude Code não encontrado"),
-            NOW,
-            &thresholds(),
-        );
+        let v = claude_view(&Metric::unavailable(CLAUDE_NOT_FOUND), NOW, &thresholds());
         assert_eq!(v.plan, "");
         assert_eq!(v.five.pct.text, "—");
-        assert_eq!(v.week.pct.tip, "Claude Code não encontrado");
+        assert_eq!(v.week.pct.tip, CLAUDE_NOT_FOUND);
     }
 
     fn codex_ok() -> ClaudeState {
@@ -730,20 +726,15 @@ mod tests {
     #[test]
     fn codex_is_listed_unless_auth_json_is_missing() {
         assert!(codex_listed(&codex_ok()));
-        assert!(codex_listed(&Metric::unavailable(
-            "abra o Codex para renovar o login"
-        )));
-        assert!(!codex_listed(&Metric::unavailable("Codex não encontrado")));
+        assert!(codex_listed(&Metric::unavailable(CODEX_RENEW_LOGIN_TIP)));
+        assert!(!codex_listed(&Metric::unavailable(CODEX_NOT_FOUND)));
     }
 
     #[test]
     fn expired_codex_login_is_dash_with_renew_tip() {
-        let v = codex_view(
-            &Metric::unavailable("abra o Codex para renovar o login"),
-            NOW,
-        );
+        let v = codex_view(&Metric::unavailable(CODEX_RENEW_LOGIN_TIP), NOW);
         assert_eq!(v.five.pct.text, "—");
-        assert_eq!(v.week.pct.tip, "abra o Codex para renovar o login");
+        assert_eq!(v.week.pct.tip, CODEX_RENEW_LOGIN_TIP);
     }
 
     #[test]
