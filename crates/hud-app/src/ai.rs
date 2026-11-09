@@ -73,11 +73,11 @@ struct Sources {
 impl Sources {
     fn new(home: &Path) -> Self {
         Self {
-            claude: ClaudeProvider {
-                credentials: FileCredentials::new(FileCredentials::default_path(home)),
-                api: UreqApi::new(),
-                transcripts: JsonlScanner::new(JsonlScanner::default_root(home)),
-            },
+            claude: ClaudeProvider::new(
+                FileCredentials::new(FileCredentials::default_path(home)),
+                UreqApi::new(),
+                JsonlScanner::new(JsonlScanner::default_root(home)),
+            ),
             codex: CodexProvider {
                 credentials: FileCredentials::new(FileCredentials::codex_path(home)),
                 api: UreqApi::new(),

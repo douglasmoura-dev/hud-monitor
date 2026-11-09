@@ -65,6 +65,7 @@ pub const NOT_RUNNING: &str = "inativo";
 
 pub const CLAUDE_NOT_FOUND: &str = "Claude Code não encontrado";
 pub const CLAUDE_RENEW_LOGIN_TIP: &str = "abra o Claude Code para renovar o login";
+pub const API_RATE_LIMITED: &str = "API limitou as consultas";
 pub const CODEX_NOT_FOUND: &str = "Codex não encontrado";
 pub const CODEX_RENEW_LOGIN_TIP: &str = "abra o Codex para renovar o login";
 pub const GEMINI_NOT_FOUND: &str = "Gemini CLI não encontrado";
@@ -95,6 +96,17 @@ pub fn invalid_date(raw: &str) -> String {
 
 pub fn missing_window(name: &str) -> String {
     format!("janela {name} ausente")
+}
+
+/// Tooltip of a reading kept from an earlier poll, e.g. "dados de há 12 min — API limitou as consultas".
+pub fn stale_tip(age_secs: i64, reason: &str) -> String {
+    let minutes = (age_secs / 60).max(1);
+    let age = if minutes < 60 {
+        format!("{minutes} min")
+    } else {
+        format!("{}h{:02}", minutes / 60, minutes % 60)
+    };
+    format!("dados de há {age} — {reason}")
 }
 
 pub fn no_connection(provider: &str) -> String {
