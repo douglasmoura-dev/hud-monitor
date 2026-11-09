@@ -1,0 +1,31 @@
+// Window chrome with diagonally cut corners, built from plain rectangles plus four tiny corner
+// triangles. A single full-window Path is much more expensive to redraw on the software renderer.
+
+// Fills a width x height box whose four corners are cut `cut` px; `top-only` cuts just the top two.
+export component CutBox inherits Rectangle {
+    in property <color> fill;
+    in property <color> line: transparent;
+    in property <length> cut: 8px;
+    in property <bool> top-only: false;
+    private property <length> bottom-cut: root.top-only ? 0px : root.cut;
+
+    // body: a middle column and two side bands
+    Rectangle { x: root.cut; y: 0px; width: root.width - 2 * root.cut; height: root.height; background: root.fill; }
+    Rectangle { x: 0px; y: root.cut; width: root.cut; height: root.height - root.cut - root.bottom-cut; background: root.fill; }
+    Rectangle { x: root.width - root.cut; y: root.cut; width: root.cut; height: root.height - root.cut - root.bottom-cut; background: root.fill; }
+    // corner triangles
+    Path { x: 0px; y: 0px; width: root.cut; height: root.cut; viewbox-width: root.cut / 1px; viewbox-height: root.cut / 1px; fill: root.fill; commands: "M " + root.cut / 1px + " 0 L " + root.cut / 1px + " " + root.cut / 1px + " L 0 " + root.cut / 1px + " Z"; }
+    Path { x: root.width - root.cut; y: 0px; width: root.cut; height: root.cut; viewbox-width: root.cut / 1px; viewbox-height: root.cut / 1px; fill: root.fill; commands: "M 0 0 L 0 " + root.cut / 1px + " L " + root.cut / 1px + " " + root.cut / 1px + " Z"; }
+    if !root.top-only : Path { x: 0px; y: root.height - root.cut; width: root.cut; height: root.cut; viewbox-width: root.cut / 1px; viewbox-height: root.cut / 1px; fill: root.fill; commands: "M 0 0 L " + root.cut / 1px + " 0 L " + root.cut / 1px + " " + root.cut / 1px + " Z"; }
+    if !root.top-only : Path { x: root.width - root.cut; y: root.height - root.cut; width: root.cut; height: root.cut; viewbox-width: root.cut / 1px; viewbox-height: root.cut / 1px; fill: root.fill; commands: "M 0 0 L " + root.cut / 1px + " 0 L 0 " + root.cut / 1px + " Z"; }
+
+    // outline: four straight edges and four diagonals
+    Rectangle { x: root.cut; y: 0px; width: root.width - 2 * root.cut; height: 1px; background: root.line; }
+    Rectangle { x: 0px; y: root.cut; width: 1px; height: root.height - root.cut - root.bottom-cut; background: root.line; }
+    Rectangle { x: root.width - 1px; y: root.cut; width: 1px; height: root.height - root.cut - root.bottom-cut; background: root.line; }
+    if !root.top-only : Rectangle { x: root.cut; y: root.height - 1px; width: root.width - 2 * root.cut; height: 1px; background: root.line; }
+    Path { x: 0px; y: 0px; width: root.cut; height: root.cut; viewbox-width: root.cut / 1px; viewbox-height: root.cut / 1px; stroke: root.line; stroke-width: 1px; commands: "M " + root.cut / 1px + " 0 L 0 " + root.cut / 1px; }
+    Path { x: root.width - root.cut; y: 0px; width: root.cut; height: root.cut; viewbox-width: root.cut / 1px; viewbox-height: root.cut / 1px; stroke: root.line; stroke-width: 1px; commands: "M 0 0 L " + root.cut / 1px + " " + root.cut / 1px; }
+    if !root.top-only : Path { x: 0px; y: root.height - root.cut; width: root.cut; height: root.cut; viewbox-width: root.cut / 1px; viewbox-height: root.cut / 1px; stroke: root.line; stroke-width: 1px; commands: "M 0 0 L " + root.cut / 1px + " " + root.cut / 1px; }
+    if !root.top-only : Path { x: root.width - root.cut; y: root.height - root.cut; width: root.cut; height: root.cut; viewbox-width: root.cut / 1px; viewbox-height: root.cut / 1px; stroke: root.line; stroke-width: 1px; commands: "M " + root.cut / 1px + " 0 L 0 " + root.cut / 1px; }
+}

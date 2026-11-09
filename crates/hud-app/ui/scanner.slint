@@ -30,15 +30,28 @@ export component Scanner inherits Window {
     callback cancel-remove();
     callback finish();
 
+    Rectangle { // solid title strip (cyberpunk)
+        y: 0px;
+        height: 36px;
+        visible: Theme.solid-strip;
+        background: Theme.title-bar;
+    }
+    if Theme.has-side-rule : Rectangle {
+        x: 0px;
+        y: 36px;
+        width: 3px;
+        height: root.height - 36px;
+        background: Theme.side-rule;
+    }
     Text {
         x: 16px;
         y: 12px;
-        text: "LIMPEZA DE DISCO";
-        color: Theme.teal;
-        font-family: Theme.label-font;
+        text: Theme.prompt ? Theme.title + " " + Theme.lb("LIMPEZA DE DISCO") : Theme.lb("LIMPEZA DE DISCO");
+        color: Theme.solid-strip ? Theme.title-text : Theme.teal;
+        font-family: Theme.title-font;
         font-weight: 600;
-        font-size: 14px;
-        letter-spacing: 1.5px;
+        font-size: Theme.lf(14px);
+        letter-spacing: Theme.tracking;
     }
     Text {
         x: 16px;
@@ -48,7 +61,7 @@ export component Scanner inherits Window {
         color: Theme.dim;
         font-family: Theme.label-font;
         font-weight: 500;
-        font-size: 12px;
+        font-size: Theme.lf(12px);
     }
 
     for row[i] in root.rows : Rectangle {
@@ -79,7 +92,7 @@ export component Scanner inherits Window {
             color: row.enabled ? Theme.text : Theme.dim;
             font-family: Theme.label-font;
             font-weight: 600;
-            font-size: 14px;
+            font-size: Theme.lf(14px);
         }
         Text {
             x: 44px + 170px;
@@ -89,8 +102,8 @@ export component Scanner inherits Window {
             color: Theme.amber;
             font-family: Theme.label-font;
             font-weight: 600;
-            font-size: 11px;
-            letter-spacing: 1px;
+            font-size: Theme.lf(11px);
+            letter-spacing: Theme.tracking;
         }
         Text {
             x: 44px;
@@ -100,7 +113,7 @@ export component Scanner inherits Window {
             color: Theme.dim;
             font-family: Theme.label-font;
             font-weight: 500;
-            font-size: 11px;
+            font-size: Theme.lf(11px);
             overflow: elide;
         }
         Text {
@@ -110,7 +123,7 @@ export component Scanner inherits Window {
             text: row.size;
             color: row.enabled ? Theme.text : Theme.dim;
             font-family: Theme.number-font;
-            font-size: 14px;
+            font-size: Theme.nf(14px);
             horizontal-alignment: right;
         }
     }
@@ -126,7 +139,7 @@ export component Scanner inherits Window {
         text: "Selecionado: " + root.total;
         color: Theme.text;
         font-family: Theme.number-font;
-        font-size: 13px;
+        font-size: Theme.nf(13px);
     }
     Text {
         x: 16px;
@@ -135,7 +148,7 @@ export component Scanner inherits Window {
         color: Theme.dim;
         font-family: Theme.label-font;
         font-weight: 500;
-        font-size: 11px;
+        font-size: Theme.lf(11px);
     }
     TouchArea {
         x: root.width - 340px;
@@ -145,7 +158,7 @@ export component Scanner inherits Window {
         enabled: root.can-remove;
         clicked => { root.ask-remove(); }
         Rectangle {
-            border-radius: 4px;
+            border-radius: Theme.radius > 0px ? 4px : 0px;
             border-width: 1px;
             border-color: root.can-remove ? Theme.amber : Theme.border;
             Text {
@@ -153,7 +166,7 @@ export component Scanner inherits Window {
                 color: root.can-remove ? Theme.amber : Theme.dim;
                 font-family: Theme.label-font;
                 font-weight: 600;
-                font-size: 12px;
+                font-size: Theme.lf(12px);
             }
         }
     }
@@ -165,7 +178,7 @@ export component Scanner inherits Window {
         enabled: !root.scanning;
         clicked => { root.rescan(); }
         Rectangle {
-            border-radius: 4px;
+            border-radius: Theme.radius > 0px ? 4px : 0px;
             border-width: 1px;
             border-color: Theme.border;
             Text {
@@ -173,7 +186,7 @@ export component Scanner inherits Window {
                 color: root.scanning ? Theme.dim : Theme.teal;
                 font-family: Theme.label-font;
                 font-weight: 600;
-                font-size: 12px;
+                font-size: Theme.lf(12px);
             }
         }
     }
@@ -184,7 +197,7 @@ export component Scanner inherits Window {
         height: 28px;
         clicked => { root.dismiss(); }
         Rectangle {
-            border-radius: 4px;
+            border-radius: Theme.radius > 0px ? 4px : 0px;
             border-width: 1px;
             border-color: Theme.border;
             Text {
@@ -192,7 +205,7 @@ export component Scanner inherits Window {
                 color: Theme.teal;
                 font-family: Theme.label-font;
                 font-weight: 600;
-                font-size: 12px;
+                font-size: Theme.lf(12px);
             }
         }
     }
@@ -207,12 +220,12 @@ export component Scanner inherits Window {
         Text {
             x: 16px;
             y: 14px;
-            text: root.phase == "confirm" ? "CONFIRMAR LIMPEZA" : root.phase == "running" ? "LIMPANDO" : "RESULTADO";
+            text: Theme.lb(root.phase == "confirm" ? "CONFIRMAR LIMPEZA" : root.phase == "running" ? "LIMPANDO" : "RESULTADO");
             color: Theme.teal;
             font-family: Theme.label-font;
             font-weight: 600;
-            font-size: 14px;
-            letter-spacing: 1.5px;
+            font-size: Theme.lf(14px);
+            letter-spacing: Theme.tracking;
         }
         Text {
             x: 16px;
@@ -222,7 +235,7 @@ export component Scanner inherits Window {
             color: Theme.text;
             font-family: Theme.label-font;
             font-weight: 600;
-            font-size: 14px;
+            font-size: Theme.lf(14px);
             wrap: word-wrap;
         }
         Text {
@@ -233,7 +246,7 @@ export component Scanner inherits Window {
             color: Theme.amber;
             font-family: Theme.label-font;
             font-weight: 600;
-            font-size: 12px;
+            font-size: Theme.lf(12px);
         }
         for line[i] in root.lines : Text {
             x: 16px;
@@ -243,7 +256,7 @@ export component Scanner inherits Window {
             color: Theme.dim;
             font-family: Theme.label-font;
             font-weight: 500;
-            font-size: 12px;
+            font-size: Theme.lf(12px);
             overflow: elide;
         }
         TouchArea {
@@ -254,7 +267,7 @@ export component Scanner inherits Window {
             visible: root.phase == "confirm";
             clicked => { root.confirm-remove(); }
             Rectangle {
-                border-radius: 4px;
+                border-radius: Theme.radius > 0px ? 4px : 0px;
                 border-width: 1px;
                 border-color: Theme.amber;
                 Text {
@@ -262,7 +275,7 @@ export component Scanner inherits Window {
                     color: Theme.amber;
                     font-family: Theme.label-font;
                     font-weight: 600;
-                    font-size: 12px;
+                    font-size: Theme.lf(12px);
                 }
             }
         }
@@ -274,7 +287,7 @@ export component Scanner inherits Window {
             visible: root.phase == "confirm" || root.phase == "running";
             clicked => { root.cancel-remove(); }
             Rectangle {
-                border-radius: 4px;
+                border-radius: Theme.radius > 0px ? 4px : 0px;
                 border-width: 1px;
                 border-color: Theme.border;
                 Text {
@@ -282,7 +295,7 @@ export component Scanner inherits Window {
                     color: Theme.teal;
                     font-family: Theme.label-font;
                     font-weight: 600;
-                    font-size: 12px;
+                    font-size: Theme.lf(12px);
                 }
             }
         }
@@ -294,7 +307,7 @@ export component Scanner inherits Window {
             visible: root.phase == "done";
             clicked => { root.finish(); }
             Rectangle {
-                border-radius: 4px;
+                border-radius: Theme.radius > 0px ? 4px : 0px;
                 border-width: 1px;
                 border-color: Theme.border;
                 Text {
@@ -302,9 +315,19 @@ export component Scanner inherits Window {
                     color: Theme.teal;
                     font-family: Theme.label-font;
                     font-weight: 600;
-                    font-size: 12px;
+                    font-size: Theme.lf(12px);
                 }
             }
         }
+    }
+
+    if Theme.has-scanlines : Image {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        source: Theme.scan-tile;
+        horizontal-tiling: repeat;
+        vertical-tiling: repeat;
     }
 }

@@ -143,6 +143,34 @@ pub fn theme_name(theme: ThemeId) -> &'static str {
     }
 }
 
+// ---------- theme identity ----------
+
+pub const TITLE_GAMER: &str = "SYS // MONITOR";
+pub const TITLE_CYBERPUNK: &str = "SYS_MONITOR";
+pub const TITLE_MINIMAL: &str = "monitor";
+pub const TITLE_TERMINAL: &str = "user@hud:~$";
+pub const TITLE_LIGHT: &str = "Monitor";
+
+/// Cyberpunk names of the section labels; labels not listed here are just joined with underscores.
+const SNAKE_LABELS: [(&str, &str); 8] = [
+    ("CPU", "CPU_LOAD"),
+    ("RAM", "RAM_USED"),
+    ("GPU", "GPU_CORE"),
+    ("DISCO", "DISCO_USO"),
+    ("REDE", "REDE_TRAFEGO"),
+    ("INTEL", "GPU_INTEL"),
+    ("NVIDIA", "GPU_NVIDIA"),
+    ("VRAM", "VRAM_USED"),
+];
+
+/// `CPU_LOAD`-style form of a section label.
+pub fn snake_label(key: &str) -> String {
+    SNAKE_LABELS.iter().find(|(k, _)| *k == key).map_or_else(
+        || key.to_uppercase().replace(' ', "_"),
+        |(_, v)| (*v).to_string(),
+    )
+}
+
 // ---------- disk cleanup scanner ----------
 
 pub const NEEDS_ADMIN: &str = "precisa de admin";

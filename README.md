@@ -15,4 +15,4 @@ Código sob a [licença MIT](LICENSE): livre para usar, copiar, modificar e dist
 
 A interface usa o [Slint](https://slint.dev) sob a licença Royalty-free do Slint.
 
-As fontes Rajdhani e Share Tech Mono embutidas seguem a [SIL Open Font License 1.1](crates/hud-app/ui/fonts/) de cada uma.
+As fontes Rajdhani, Share Tech Mono, Orbitron, Chakra Petch, Inter e VT323 embutidas seguem a [SIL Open Font License 1.1](crates/hud-app/ui/fonts/) de cada uma.

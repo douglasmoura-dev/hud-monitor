@@ -1,4 +1,5 @@
 import { Bar, Field, Limit, PresenceData, Theme } from "theme.slint";
+import { CutBox } from "chrome.slint";
 import { MiniBar } from "minibar.slint";
 import { CleanRow, Scanner } from "scanner.slint";
 
@@ -8,8 +9,8 @@ component Label inherits Text {
     color: Theme.dim;
     font-family: Theme.label-font;
     font-weight: 600;
-    font-size: 11px;
-    letter-spacing: 1.5px;
+    font-size: Theme.lf(11px);
+    letter-spacing: Theme.tracking;
 }
 
 component Val inherits Rectangle {
@@ -23,7 +24,7 @@ component Val inherits Rectangle {
         text: root.field.text;
         color: root.field.tip == "" ? Theme.tone(root.field.level, root.tint) : Theme.dim;
         font-family: Theme.number-font;
-        font-size: root.size;
+        font-size: Theme.nf(root.size);
     }
     TouchArea {
         enabled: root.field.tip != "";
@@ -31,23 +32,69 @@ component Val inherits Rectangle {
     }
 }
 
+// Progress bar drawn by the theme: thin or rounded track, segmented blocks, ASCII text, or nothing.
 component Meter inherits Rectangle {
     in property <float> percent;
     in property <color> tint;
-    height: 6px;
-    border-radius: 3px;
-    background: Theme.track;
-    Rectangle {
-        x: 0px;
-        width: parent.width * clamp(root.percent, 0, 100) / 100;
-        border-radius: 3px;
-        background: root.tint;
+    in property <int> cells: 20;
+    in property <int> ascii-cells: 24;
+    height: Theme.bar-style == "rounded" ? 8px : 6px;
+    visible: Theme.bar-style != "none";
+    private property <length> gap: 2px;
+    private property <length> block: (root.width - root.gap * (root.cells - 1)) / root.cells;
+    if Theme.bar-style == "thin" || Theme.bar-style == "rounded" : Rectangle {
+        border-radius: root.height / 2;
+        background: Theme.track;
+        Rectangle {
+            x: 0px;
+            width: parent.width * clamp(root.percent, 0, 100) / 100;
+            border-radius: parent.border-radius;
+            background: root.tint;
+        }
+    }
+    if Theme.bar-style == "segmented" : Rectangle {
+        for i in root.cells : Rectangle {
+            x: i * (root.block + root.gap);
+            width: root.block;
+            background: i < Theme.lit(root.percent, root.cells) ? root.tint : Theme.track;
+        }
+    }
+    if Theme.bar-style == "ascii" : Text {
+        y: (root.height - self.height) / 2;
+        width: parent.width;
+        height: 14px;
+        text: Theme.ascii(root.percent, root.ascii-cells);
+        color: root.tint;
+        font-family: Theme.number-font;
+        font-size: Theme.nf(11px);
+        vertical-alignment: center;
+        overflow: clip;
     }
 }
 
 component Rule inherits Rectangle {
     height: 1px;
     background: Theme.track;
+    visible: !Theme.airy && !Theme.cards;
+}
+
+// Status dot of the card layout, colored by alert level.
+component Dot inherits Rectangle {
+    in property <int> level;
+    visible: Theme.cards;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: Theme.tone(root.level, Theme.green);
+}
+
+component Card inherits Rectangle {
+    visible: Theme.cards;
+    x: 6px;
+    border-radius: 8px;
+    background: Theme.card;
+    border-width: 1px;
+    border-color: Theme.track;
 }
 
 component Arrow inherits Path {
@@ -66,25 +113,56 @@ component LimitRow inherits Rectangle {
     Text {
         x: 0px;
         width: 52px;
-        text: root.name;
+        text: Theme.lb(root.name);
         color: Theme.dim;
         font-family: Theme.label-font;
         font-weight: 600;
-        font-size: 11px;
-        letter-spacing: 1.5px;
+        font-size: Theme.lf(11px);
+        letter-spacing: Theme.tracking;
         vertical-alignment: center;
     }
-    Meter { x: 56px; y: 6px; width: 100px; percent: root.limit.percent; tint: root.tint; }
-    Val { x: 164px; y: 1px; size: 12px; field: root.limit.pct; tip(s) => { root.tip(s); } }
+    Meter { x: 56px; y: 6px; width: 100px; cells: 10; ascii-cells: 11; percent: root.limit.percent; tint: root.tint; }
+    Val { x: Theme.bar-style == "none" ? 56px : 164px; y: 1px; size: 12px; field: root.limit.pct; tip(s) => { root.tip(s); } }
     Text {
         x: parent.width - self.width;
         width: 48px;
         text: root.limit.reset;
         color: Theme.dim;
         font-family: Theme.number-font;
-        font-size: 11px;
+        font-size: Theme.nf(11px);
         vertical-alignment: center;
         horizontal-alignment: right;
+    }
+}
+
+component PresenceRow inherits Rectangle {
+    in property <string> name;
+    in property <string> status;
+    Text {
+        x: 0px;
+        y: 0px;
+        width: 90px;
+        height: parent.height;
+        text: root.name;
+        color: Theme.dim;
+        font-family: Theme.label-font;
+        font-weight: 600;
+        font-size: Theme.lf(11px);
+        letter-spacing: Theme.tracking;
+        vertical-alignment: center;
+        horizontal-alignment: left;
+    }
+    Text {
+        x: 100px;
+        y: 0px;
+        width: parent.width - 100px;
+        height: parent.height;
+        text: root.status;
+        color: root.status == "inativo" ? Theme.dim : Theme.teal;
+        font-family: Theme.number-font;
+        font-size: Theme.nf(12px);
+        vertical-alignment: center;
+        horizontal-alignment: left;
     }
 }
 
@@ -94,7 +172,7 @@ component GpuCell inherits Rectangle {
     callback tip(string);
     width: 96px;
     height: 32px;
-    Label { x: 0px; y: 0px; text: root.name; }
+    Label { x: 0px; y: 0px; text: Theme.lb(root.name); }
     Val { x: 0px; y: 14px; field: root.field; tip(s) => { root.tip(s); } }
 }
 
@@ -148,47 +226,88 @@ export component Hud inherits Window {
     in property <Limit> cursor-month;
     in property <[PresenceData]> presence;
     property <string> hover-tip;
+    private property <bool> blink-on: true;
+    private property <length> title-x: Theme.prompt ? 10px : 26px;
 
     Rectangle {
-        background: Theme.background.with-alpha(root.bg-alpha);
+        background: Theme.corner-cut > 0px ? transparent : Theme.background.with-alpha(root.bg-alpha);
         border-color: Theme.border;
-        border-width: 1px;
+        border-width: Theme.borders && Theme.corner-cut == 0px ? 1px : 0px;
         border-radius: Theme.radius;
         clip: true;
 
-        // Title bar
-        Rectangle {
+        if Theme.corner-cut > 0px : CutBox {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            cut: Theme.corner-cut;
+            fill: Theme.background.with-alpha(root.bg-alpha);
+            line: Theme.borders ? Theme.border : transparent;
+        }
+
+        // Title strip
+        if Theme.corner-cut == 0px : Rectangle {
             y: 0px;
             height: 30px;
             background: Theme.title-bar;
+        }
+        if Theme.corner-cut > 0px : CutBox {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: 30px;
+            cut: Theme.corner-cut;
+            top-only: true;
+            fill: Theme.title-bar;
+        }
+        Rectangle {
+            y: 0px;
+            height: 30px;
             TouchArea {
                 moved => { root.moved(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
                 pointer-event(e) => { if e.kind == PointerEventKind.up { root.released(); } }
             }
-            for row in [0, 1, 2]: Rectangle {
-                x: 10px;
-                y: 9px + row * 5px;
-                width: 8px;
-                height: 2px;
-                background: Theme.dim;
+            if !Theme.prompt : Rectangle {
+                x: 0px;
+                for row in [0, 1, 2]: Rectangle {
+                    x: 10px;
+                    y: 9px + row * 5px;
+                    width: 8px;
+                    height: 2px;
+                    background: Theme.title-icon;
+                }
             }
-            Text {
-                x: 26px;
-                text: "SYS // MONITOR";
-                color: Theme.teal;
-                font-family: Theme.label-font;
+            title := Text {
+                x: root.title-x;
+                text: Theme.title;
+                color: Theme.title-text;
+                font-family: Theme.title-font;
                 font-weight: 600;
-                font-size: 14px;
-                letter-spacing: 1.5px;
+                font-size: Theme.lf(14px);
+                letter-spacing: Theme.tracking;
                 vertical-alignment: center;
+            }
+            if Theme.prompt : Rectangle { // blinking cursor after the prompt
+                x: root.title-x + title.preferred-width + 4px;
+                y: 8px;
+                width: 8px;
+                height: 14px;
+                background: Theme.title-text;
+                opacity: root.blink-on ? 1 : 0;
+            }
+            Timer {
+                interval: 1s;
+                running: Theme.prompt;
+                triggered => { root.blink-on = !root.blink-on; }
             }
             Text {
                 x: parent.width - 138px;
                 width: 48px;
                 text: root.clock;
-                color: Theme.dim;
+                color: Theme.title-icon;
                 font-family: Theme.number-font;
-                font-size: 12px;
+                font-size: Theme.nf(12px);
                 vertical-alignment: center;
                 horizontal-alignment: right;
             }
@@ -204,8 +323,8 @@ export component Hud inherits Window {
                     height: 10px;
                     border-radius: 5px;
                     border-width: 1.5px;
-                    border-color: root.pinned || parent.has-hover ? Theme.teal : Theme.dim;
-                    background: root.pinned ? Theme.teal : transparent;
+                    border-color: root.pinned || parent.has-hover ? Theme.title-text : Theme.title-icon;
+                    background: root.pinned ? Theme.title-text : transparent;
                 }
             }
             TouchArea { // minimize to the mini bar
@@ -218,7 +337,7 @@ export component Hud inherits Window {
                     width: 10px;
                     height: 10px;
                     border-width: 1.5px;
-                    border-color: Theme.dim;
+                    border-color: Theme.title-icon;
                 }
             }
             TouchArea { // close
@@ -231,55 +350,90 @@ export component Hud inherits Window {
                     width: 10px;
                     height: 10px;
                     commands: "M 0 0 L 10 10 M 10 0 L 0 10";
-                    stroke: Theme.dim;
+                    stroke: Theme.title-icon;
                     stroke-width: 1.5px;
                 }
             }
         }
 
+        if Theme.has-side-rule : Rectangle {
+            x: 0px;
+            y: Theme.corner-cut;
+            width: 3px;
+            height: parent.height - 2 * Theme.corner-cut;
+            background: Theme.side-rule;
+        }
+
+        // Cards of the light theme
+        Card { y: 34px; width: 308px; height: 106px; }
+        Card { y: 146px; width: 308px; height: 52px; }
+        Card { y: 204px; width: 308px; height: 56px; }
+        Card { y: 266px; width: 308px; height: 52px; }
+        Card { y: 322px; width: 308px; height: 62px; }
+
         // CPU
-        Label { x: 12px; y: 36px; text: "CPU"; }
-        Val { x: 12px; y: 48px; size: 28px; tint: Theme.teal; field: root.cpu-total; tip(s) => { root.hover-tip = s; } }
-        Val { x: 100px; y: 52px; field: root.cpu-freq; tip(s) => { root.hover-tip = s; } }
-        Val { x: 100px; y: 70px; field: root.cpu-temp; tip(s) => { root.hover-tip = s; } }
-        Val { x: 12px; y: 88px; size: 11px; tint: Theme.dim; field: root.cpu-cores; tip(s) => { root.hover-tip = s; } }
-        for bar[i] in root.core-bars: Rectangle {
-            x: 12px + i * 18px;
-            y: 106px;
-            width: 14px;
-            height: 28px;
-            background: Theme.track;
-            Rectangle {
-                y: parent.height * (1 - clamp(bar.percent, 0, 100) / 100);
-                height: parent.height - self.y;
-                background: bar.hot ? Theme.crit : Theme.green;
+        cpu-label := Label { x: 12px; y: 36px; text: Theme.lb("CPU"); }
+        Dot { x: cpu-label.x + cpu-label.preferred-width + 6px; y: 40px; level: root.cpu-total.level; }
+        Val { x: 12px; y: Theme.airy ? 46px : 48px; size: Theme.airy ? 44px : 28px; tint: Theme.teal; field: root.cpu-total; tip(s) => { root.hover-tip = s; } }
+        if !Theme.airy : Rectangle {
+            Val { x: 100px; y: 52px; field: root.cpu-freq; tip(s) => { root.hover-tip = s; } }
+            Val { x: 100px; y: 70px; field: root.cpu-temp; tip(s) => { root.hover-tip = s; } }
+            Val { x: 12px; y: 88px; size: 11px; tint: Theme.dim; field: root.cpu-cores; tip(s) => { root.hover-tip = s; } }
+        }
+        if Theme.airy : HorizontalLayout { // one dim line with the CPU details
+            x: 12px;
+            y: 104px;
+            height: 16px;
+            spacing: 12px;
+            alignment: start;
+            Val { size: 11px; tint: Theme.dim; field: root.cpu-freq; tip(s) => { root.hover-tip = s; } }
+            Val { size: 11px; tint: Theme.dim; field: root.cpu-temp; tip(s) => { root.hover-tip = s; } }
+            Val { size: 11px; tint: Theme.dim; field: root.cpu-cores; tip(s) => { root.hover-tip = s; } }
+        }
+        if Theme.bar-style != "none" : Rectangle {
+            for bar[i] in root.core-bars: Rectangle {
+                x: 12px + i * 18px;
+                y: 106px;
+                width: 14px;
+                height: 28px;
+                border-radius: Theme.bar-style == "rounded" ? 3px : 0px;
+                background: Theme.track;
+                clip: true;
+                Rectangle {
+                    y: parent.height * (1 - clamp(bar.percent, 0, 100) / 100);
+                    height: parent.height - self.y;
+                    background: bar.hot ? Theme.crit : Theme.green;
+                }
             }
         }
         Rule { x: 12px; y: 142px; width: parent.width - 24px; }
 
         // RAM
-        Label { x: 12px; y: 148px; text: "RAM"; }
-        Val { x: parent.width - 12px - self.width; y: 146px; field: root.ram; tip(s) => { root.hover-tip = s; } }
-        Meter { x: 12px; y: 168px; width: parent.width - 24px; percent: root.ram-percent; tint: Theme.purple; }
+        ram-label := Label { x: 12px; y: 148px; text: Theme.lb("RAM"); }
+        Dot { x: ram-label.x + ram-label.preferred-width + 6px; y: 152px; level: root.ram.level; }
+        Val { x: parent.width - 12px - self.width; y: Theme.airy ? 140px : 146px; size: Theme.airy ? 20px : 13px; field: root.ram; tip(s) => { root.hover-tip = s; } }
+        Meter { x: 12px; y: 168px; width: parent.width - 24px; ascii-cells: 30; percent: root.ram-percent; tint: Theme.purple; }
         Val { x: 12px; y: 178px; size: 10px; tint: Theme.dim; field: root.ram-top; tip(s) => { root.hover-tip = s; } }
         Rule { x: 12px; y: 200px; width: parent.width - 24px; }
 
         // GPU
-        Label { x: 12px; y: 206px; text: "GPU"; }
+        Label { x: 12px; y: 206px; text: Theme.lb("GPU"); }
         GpuCell { x: 12px; y: 222px; name: "INTEL"; field: root.gpu-intel; tip(s) => { root.hover-tip = s; } }
         GpuCell { x: 112px; y: 222px; name: "NVIDIA"; field: root.gpu-nvidia; tip(s) => { root.hover-tip = s; } }
         GpuCell { x: 212px; y: 222px; name: "VRAM"; field: root.gpu-vram; tip(s) => { root.hover-tip = s; } }
         Rule { x: 12px; y: 262px; width: parent.width - 24px; }
 
         // DISCO
-        Label { x: 12px; y: 268px; text: "DISCO"; }
-        Val { x: parent.width - 12px - self.width; y: 266px; field: root.disk; tip(s) => { root.hover-tip = s; } }
-        Meter { x: 12px; y: 288px; width: parent.width - 24px; percent: root.disk-percent; tint: Theme.amber; }
+        disk-label := Label { x: 12px; y: 268px; text: Theme.lb("DISCO"); }
+        Dot { x: disk-label.x + disk-label.preferred-width + 6px; y: 272px; level: root.disk.level; }
+        Val { x: parent.width - 12px - self.width; y: Theme.airy ? 260px : 266px; size: Theme.airy ? 20px : 13px; field: root.disk; tip(s) => { root.hover-tip = s; } }
+        Meter { x: 12px; y: 288px; width: parent.width - 24px; ascii-cells: 30; percent: root.disk-percent; tint: Theme.amber; }
         Val { x: 12px; y: 298px; size: 11px; tint: Theme.dim; field: root.disk-io; tip(s) => { root.hover-tip = s; } }
         Rule { x: 12px; y: 318px; width: parent.width - 24px; }
 
         // REDE
-        Label { x: 12px; y: 324px; text: "REDE"; }
+        net-label := Label { x: 12px; y: 324px; text: Theme.lb("REDE"); }
+        Dot { x: net-label.x + net-label.preferred-width + 6px; y: 328px; level: root.ping.level; }
         Arrow { x: 12px; y: 345px; down: true; fill: Theme.teal; }
         Val { x: 26px; y: 340px; tint: Theme.teal; field: root.net-down; tip(s) => { root.hover-tip = s; } }
         Arrow { x: 160px; y: 345px; down: false; fill: Theme.blue; }
@@ -290,24 +444,24 @@ export component Hud inherits Window {
         Rule { x: 12px; y: 384px; width: parent.width - 24px; }
 
         // LIMITES IA
-        Label { x: 12px; y: 390px; text: "LIMITES IA"; }
+        Label { x: 12px; y: 390px; text: Theme.lb("LIMITES IA"); }
         Text {
             x: 12px;
             y: 408px;
-            text: "CLAUDE";
+            text: Theme.lb("CLAUDE");
             color: Theme.text;
             font-family: Theme.label-font;
             font-weight: 600;
-            font-size: 13px;
-            letter-spacing: 1px;
+            font-size: Theme.lf(13px);
+            letter-spacing: Theme.tracking;
         }
         Rectangle {
             visible: root.claude-plan != "";
-            x: 70px;
+            x: 70px + (Theme.label-scale - 1) * 40px;
             y: 409px;
             width: badge.preferred-width + 10px;
             height: 15px;
-            border-radius: 3px;
+            border-radius: Theme.radius > 0px ? 3px : 0px;
             border-width: 1px;
             border-color: Theme.teal;
             badge := Text {
@@ -316,8 +470,8 @@ export component Hud inherits Window {
                 color: Theme.teal;
                 font-family: Theme.label-font;
                 font-weight: 600;
-                font-size: 10px;
-                letter-spacing: 1px;
+                font-size: Theme.lf(10px);
+                letter-spacing: Theme.tracking;
                 vertical-alignment: center;
             }
         }
@@ -328,12 +482,12 @@ export component Hud inherits Window {
             Text {
                 x: 12px;
                 y: 478px;
-                text: "CODEX";
+                text: Theme.lb("CODEX");
                 color: Theme.text;
                 font-family: Theme.label-font;
                 font-weight: 600;
-                font-size: 13px;
-                letter-spacing: 1px;
+                font-size: Theme.lf(13px);
+                letter-spacing: Theme.tracking;
             }
             LimitRow { x: 12px; y: 500px; width: root.width - 24px; name: "5H"; limit: root.codex-5h; tint: Theme.teal; tip(s) => { root.hover-tip = s; } }
             LimitRow { x: 12px; y: 522px; width: root.width - 24px; name: "SEMANA"; limit: root.codex-7d; tint: Theme.blue; tip(s) => { root.hover-tip = s; } }
@@ -343,12 +497,12 @@ export component Hud inherits Window {
             Text {
                 x: 12px;
                 y: root.gemini-y;
-                text: "GEMINI";
+                text: Theme.lb("GEMINI");
                 color: Theme.text;
                 font-family: Theme.label-font;
                 font-weight: 600;
-                font-size: 13px;
-                letter-spacing: 1px;
+                font-size: Theme.lf(13px);
+                letter-spacing: Theme.tracking;
             }
             LimitRow { x: 12px; y: root.gemini-y + 22px; width: root.width - 24px; name: "DIA"; limit: root.gemini-day; tint: Theme.purple; tip(s) => { root.hover-tip = s; } }
         }
@@ -357,48 +511,33 @@ export component Hud inherits Window {
             Text {
                 x: 12px;
                 y: root.cursor-y;
-                text: "CURSOR";
+                text: Theme.lb("CURSOR");
                 color: Theme.text;
                 font-family: Theme.label-font;
                 font-weight: 600;
-                font-size: 13px;
-                letter-spacing: 1px;
+                font-size: Theme.lf(13px);
+                letter-spacing: Theme.tracking;
             }
             LimitRow { x: 12px; y: root.cursor-y + 22px; width: root.width - 24px; name: "MÊS"; limit: root.cursor-month; tint: Theme.blue; tip(s) => { root.hover-tip = s; } }
         }
 
-        if root.presence.length > 0 : Rectangle {
-            Label { x: 12px; y: root.others-y; text: "OUTROS"; }
-            for row[i] in root.presence : Rectangle {
-                x: 12px;
-                y: root.others-y + 18px + 20px * i;
-                width: root.width - 24px;
-                height: 20px;
-                Text {
-                    width: 90px;
-                    text: row.name;
-                    color: Theme.dim;
-                    font-family: Theme.label-font;
-                    font-weight: 600;
-                    font-size: 11px;
-                    letter-spacing: 1.5px;
-                    vertical-alignment: center;
-                }
-                Text {
-                    x: 100px;
-                    text: row.status;
-                    color: row.status == "inativo" ? Theme.dim : Theme.teal;
-                    font-family: Theme.number-font;
-                    font-size: 12px;
-                    vertical-alignment: center;
-                }
-            }
+        // OUTROS: one PresenceRow per tool, each at its own y with explicit geometry.
+        Label { visible: root.presence.length > 0; x: 12px; y: root.others-y; text: Theme.lb("OUTROS"); }
+        for row[i] in root.presence : PresenceRow {
+            x: 12px;
+            y: root.others-y + 18px + 20px * i;
+            width: 296px;
+            height: 20px;
+            name: row.name;
+            status: row.status;
         }
 
         // Reason for an unavailable value, shown while it is hovered.
         Rectangle {
             visible: root.hover-tip != "" || root.notice != "";
+            x: Theme.corner-cut;
             y: parent.height - 22px;
+            width: parent.width - 2 * Theme.corner-cut;
             height: 22px;
             background: Theme.tip-bar;
             Text {
@@ -408,10 +547,20 @@ export component Hud inherits Window {
                 color: Theme.amber;
                 font-family: Theme.label-font;
                 font-weight: 500;
-                font-size: 12px;
+                font-size: Theme.lf(12px);
                 vertical-alignment: center;
                 overflow: elide;
             }
+        }
+
+        if Theme.has-scanlines : Image {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            source: Theme.scan-tile;
+            horizontal-tiling: repeat;
+            vertical-tiling: repeat;
         }
     }
 }
