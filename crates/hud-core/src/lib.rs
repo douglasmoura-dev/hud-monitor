@@ -8,6 +8,7 @@ pub mod extras;
 pub mod format;
 pub mod integration;
 pub mod metrics;
+pub mod netif;
 pub mod position;
 pub mod removal;
 pub mod sensors;

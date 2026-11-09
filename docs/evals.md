@@ -210,3 +210,8 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - `cargo test` (hud-core::ai): agenda de espera 5, 10, 20, 30, 30 min; `Retry-After` vence só quando maior; um sucesso zera a sequência; a API não é chamada de novo antes de 5 min (1 chamada em 5 polls de 60 s).
 - `cargo test` (hud-app::sources::claude): HTTP 429 vira `RateLimited` com os segundos do `Retry-After` (ausente ou ilegível vira `None`).
 - Não verificado: a resposta real da API da Anthropic (nenhuma chamada feita nesta PR) nem o tooltip na tela.
+
+## Verificações — filtro de interfaces de rede
+- `cargo test`: `netif::tests` (core) confirma que uma tabela como a da máquina real (Wi-Fi + 5 camadas de filtro, vEthernet + 3 filtros, 2 miniports WAN, loopback) seleciona só o Wi-Fi; que Ethernet e Wi-Fi, ambos de hardware, entram os dois; que hardware desconectado e loopback ficam de fora; e que linhas de filtro nunca são contadas.
+- Causa: cada camada de filtro NDIS tem GUID próprio e os mesmos `InOctets` do adaptador, então a heurística de "GUID único" somava o Wi-Fi 6 vezes. A seleção agora usa `InterfaceAndOperStatusFlags` (HardwareInterface ligado, FilterInterface desligado).
+- Release, `APPDATA` temporário, download de ~25 MB em laço por ~12 s: o adaptador Wi-Fi (`Get-NetAdapterStatistics`) fez 7,9 MB/s em média (8,75 MB/s na janela de 1 s ao redor da captura); o HUD mostrou ↓ 10,4 MB/s em uma leitura e ↓ 2,4 MB/s em outra (download em rajadas, leitura de 1 s), a mesma ordem de grandeza e longe de 6× (~47 MB/s). Em repouso o HUD mostrou ↓ ~1 KB/s contra 0,01 MB/s do adaptador. Nenhum arquivo do `%APPDATA%\hud-monitor` real foi tocado, a chave Run não foi alterada e nenhuma captura foi versionada.

@@ -2,6 +2,7 @@
 
 use hud_core::integration::{Backdrop, IntegrationError, RunKey};
 use hud_core::metrics::{Date, DiskIo};
+use hud_core::netif::{counted_indexes, InterfaceFacts};
 use hud_core::position::Size;
 use hud_core::ui_text::{
     com_unavailable, file_operation_unavailable, operation_flags_failed, recycle_bin_not_emptied,
@@ -577,7 +578,7 @@ mod tests {
     }
 }
 
-/// Byte counters of the physical network interfaces. The interface list (one `GetIfTable2`) is
+/// Byte counters of the hardware network adapters (filter layers excluded). The interface list (one `GetIfTable2`) is
 /// rebuilt every 30 s; each sample then reads only those rows with `GetIfEntry2`.
 pub struct NetCounters {
     luids: Vec<NET_LUID_LH>,
@@ -593,7 +594,7 @@ impl NetCounters {
         })
     }
 
-    /// `(received, sent)` bytes since boot, summed over the physical interfaces.
+    /// `(received, sent)` bytes since boot, summed over the counted adapters.
     pub fn totals(&mut self) -> (u64, u64) {
         if self.listed_at.elapsed() >= NET_LIST_REFRESH {
             if let Some(luids) = list_physical_interfaces() {
@@ -617,8 +618,17 @@ impl NetCounters {
     }
 }
 
-/// Connected hardware interfaces: a link speed, a MAC, not loopback, and alone on its interface
-/// GUID (software layers stacked on one adapter share the GUID and would count its bytes twice).
+/// Maps one interface table row into the facts the selection rule needs.
+fn interface_facts(row: &MIB_IF_ROW2) -> InterfaceFacts {
+    InterfaceFacts::from_flags(
+        row.InterfaceAndOperStatusFlags._bitfield,
+        row.MediaConnectState != MediaConnectStateDisconnected,
+        row.Type == IF_TYPE_SOFTWARE_LOOPBACK,
+    )
+}
+
+/// Counted interfaces (see `hud_core::netif`): connected hardware adapters, never the NDIS filter
+/// layers stacked on them (those repeat the adapter's counters under their own GUID).
 fn list_physical_interfaces() -> Option<Vec<NET_LUID_LH>> {
     let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
     // SAFETY: on success `table` points to a table of `NumEntries` rows that stays valid until
@@ -629,25 +639,10 @@ fn list_physical_interfaces() -> Option<Vec<NET_LUID_LH>> {
         }
         let rows =
             std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
-        let hardware: Vec<&MIB_IF_ROW2> = rows
-            .iter()
-            .filter(|r| {
-                (r.TransmitLinkSpeed != 0 || r.ReceiveLinkSpeed != 0)
-                    && r.MediaConnectState != MediaConnectStateDisconnected
-                    && r.PhysicalAddressLength != 0
-                    && r.Type != IF_TYPE_SOFTWARE_LOOPBACK
-            })
-            .collect();
-        let luids = hardware
-            .iter()
-            .filter(|r| {
-                hardware
-                    .iter()
-                    .filter(|o| o.InterfaceGuid == r.InterfaceGuid)
-                    .count()
-                    == 1
-            })
-            .map(|r| r.InterfaceLuid)
+        let facts: Vec<InterfaceFacts> = rows.iter().map(interface_facts).collect();
+        let luids = counted_indexes(&facts)
+            .into_iter()
+            .map(|i| rows[i].InterfaceLuid)
             .collect();
         FreeMibTable(table.cast());
         Some(luids)
