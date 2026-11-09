@@ -418,7 +418,7 @@ impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> ClaudeProvider<C, 
 
     /// What to show without a fresh answer: the last good reading (marked stale with its age
     /// when the last call failed), or the local estimate when there never was one.
-    fn from_memory(
+    fn remembered(
         &self,
         memory: &PollMemory,
         plan: Option<String>,
@@ -454,13 +454,13 @@ impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> AiProvider
         let creds = parse_credentials(&text)?;
         let mut memory = self.memory.lock().unwrap_or_else(PoisonError::into_inner);
         if memory.throttled(now) {
-            return self.from_memory(&memory, creds.plan, now);
+            return self.remembered(&memory, creds.plan, now);
         }
         match self.api.get(&creds.token) {
             Ok(body) => {
                 let (five_hour, seven_day) = parse_usage(&body)?;
                 memory.succeeded(five_hour, seven_day, now);
-                self.from_memory(&memory, creds.plan, now)
+                self.remembered(&memory, creds.plan, now)
             }
             Err(ApiError::Unauthorized) => {
                 memory.failed(CLAUDE_RENEW_LOGIN_TIP.to_owned());
@@ -468,11 +468,11 @@ impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> AiProvider
             }
             Err(ApiError::RateLimited { retry_after }) => {
                 memory.rate_limited(retry_after, now);
-                self.from_memory(&memory, creds.plan, now)
+                self.remembered(&memory, creds.plan, now)
             }
             Err(ApiError::Other(reason)) => {
                 memory.failed(reason);
-                self.from_memory(&memory, creds.plan, now)
+                self.remembered(&memory, creds.plan, now)
             }
         }
     }
@@ -946,7 +946,7 @@ mod tests {
         Err(ApiError::RateLimited { retry_after })
     }
 
-    fn claude<'a>(api: &'a Scripted) -> ClaudeProvider<Creds, &'a Scripted, Logs> {
+    fn claude(api: &Scripted) -> ClaudeProvider<Creds, &Scripted, Logs> {
         let sums = TokenSums {
             five_hour: 3_500_000,
             seven_day: 9_000_000,
