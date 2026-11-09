@@ -109,6 +109,13 @@ Remoção: `IFileOperation` com `FOFX_RECYCLEONDELETE`, em thread de fundo, com 
 - Slint: o `global Theme` vira propriedades `in-out` preenchidas pela paleta; `Minimalista` sem brilho nem cantos chanfrados, `Terminal` só Share Tech Mono.
 - Bandeja: submenu "Tema" com os 5, marcado o atual; trocar salva o config.
 - Sem cor livre nem temas em arquivo (decisão do usuário em 2026-11-08).
+- **Temas v2 (T17)**: a paleta sozinha deixou os temas parecidos demais (retorno do usuário em 2026-11-09). Cada tema passa a ter também um *estilo*: fontes de título/rótulo/número, caixa dos rótulos, forma dos cantos (raio ou corte diagonal), estilo de barra (`thin`, `segmented`, `ascii`, `none`, `rounded`), faixa de título, enfeites (linhas de varredura, filete lateral, cursor) e densidade. O HUD em Slint escolhe o componente de barra e de cabeçalho pelo estilo; o layout em cartões do tema Claro e o layout em linha sem barras do Minimalista são variantes do mesmo modelo de dados (`HudView`), sem lógica nova no core.
+- Fontes novas embutidas (todas OFL, subset Latin, com o arquivo de licença ao lado): Orbitron, Chakra Petch, Inter, VT323. Claro usa Segoe UI do sistema. O tamanho do exe e a memória continuam no orçamento da §7.
+
+## 8b. Redimensionar (T18)
+- `hud-core`: campo `scale` (f32, 0.6–2.0, default 1.0) em cada janela do config; valores fora da faixa são presos à faixa ao carregar. O tamanho físico = tamanho base × escala × fator de DPI; o encaixe na tela (`clamp_to_screen`) usa o tamanho escalado.
+- Slint: uma propriedade `scale` no `Theme` multiplica todos os comprimentos (fontes, alturas, espaçamentos); a janela tem `width/height` = base × `scale`. Alça de 12×12 px no canto inferior direito: arrastar converte o deslocamento em nova escala (pela diagonal, mantendo a proporção) e salva ao soltar.
+- Sem redimensionar livre nem reorganizar conteúdo (decisão do usuário em 2026-11-09).
 
 ## 9. Tarefas
 Ver [tasks.md](tasks.md). Cada tarefa vira uma issue com os critérios de [docs/evals.md](../../docs/evals.md).

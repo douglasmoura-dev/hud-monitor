@@ -20,3 +20,5 @@ Cada tarefa vira uma issue com o rótulo `spec-driven`. Critérios em [docs/eval
 | T14 | Orçamento de memória e CPU + script de medição | E14 | T07, T11, T13 |
 | T15 | Temas visuais (5 temas prontos, troca ao vivo) | E15 | T14 |
 | T16 | Código em inglês, clean code e clean architecture (refatoração sem mudar o comportamento) | E16 | T13 |
+| T17 | Temas v2: identidade própria por tema (fontes, cantos, barras, enfeites, layout) | E17 | T15 |
+| T18 | Redimensionar HUD e barrinha por escala, salvo por janela | E18 | T17 |
