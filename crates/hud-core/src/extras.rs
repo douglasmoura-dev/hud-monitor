@@ -7,15 +7,14 @@
 use crate::ai::{format_reset_in, parse_rfc3339, AiError, ApiError};
 use crate::alerts::Level;
 use crate::metrics::Metric;
+use crate::ui_text::{
+    cursor_month_percent, gemini_requests, invalid_date, CURSOR_NOT_FOUND, CURSOR_RENEW_LOGIN_TIP,
+    GEMINI_ESTIMATE_TIP, GEMINI_NOT_FOUND, NOT_RUNNING, PRESENT, RUNNING,
+};
 use crate::view::{Field, Limit, DASH};
 use serde::Deserialize;
 use std::collections::HashSet;
 
-pub const GEMINI_NOT_FOUND: &str = "Gemini CLI não encontrado";
-pub const CURSOR_NOT_FOUND: &str = "Cursor não encontrado";
-pub const CURSOR_UNAVAILABLE: &str = "uso do Cursor indisponível";
-pub const CURSOR_RENEW_LOGIN_TIP: &str = "abra o Cursor para renovar o login";
-const GEMINI_ESTIMATE_TIP: &str = "estimado pelos logs locais do Gemini CLI";
 /// Free daily request limit of Gemini CLI with a Google login (public docs); the real plan is unknown.
 pub const GEMINI_DAILY_LIMIT: u64 = 1000;
 const DAY: i64 = 86_400;
@@ -113,7 +112,7 @@ pub fn parse_cursor_usage(body: &str) -> Result<Usage, AiError> {
     let raw: RawCursor =
         serde_json::from_str(body).map_err(|e| AiError::Response(e.to_string()))?;
     let resets_at = parse_rfc3339(&raw.cycle_end)
-        .ok_or_else(|| AiError::Response(format!("data inválida `{}`", raw.cycle_end)))?;
+        .ok_or_else(|| AiError::Response(invalid_date(&raw.cycle_end)))?;
     Ok(Usage::Percent {
         percent: raw.usage.plan.percent,
         resets_at,
@@ -147,7 +146,7 @@ pub fn usage_limit(state: &UsageState, now: i64) -> Limit {
             estimated,
         }) => Limit {
             pct: Field {
-                text: format!("{}dia {used}/{limit}", if *estimated { "~" } else { "" }),
+                text: gemini_requests(*used, *limit, *estimated),
                 tip: if *estimated { GEMINI_ESTIMATE_TIP } else { "" }.to_owned(),
                 level: Level::Ok,
             },
@@ -156,7 +155,7 @@ pub fn usage_limit(state: &UsageState, now: i64) -> Limit {
         },
         Metric::Available(Usage::Percent { percent, resets_at }) => Limit {
             pct: Field {
-                text: format!("mês {percent:.0}%"),
+                text: cursor_month_percent(*percent),
                 tip: String::new(),
                 level: Level::Ok,
             },
@@ -187,18 +186,18 @@ pub fn presence_rows(copilot: bool, opencode: bool, ollama_up: bool) -> Vec<Pres
     if copilot {
         rows.push(PresenceRow {
             name: "COPILOT",
-            status: "presente",
+            status: PRESENT,
         });
     }
     if opencode {
         rows.push(PresenceRow {
             name: "OPENCODE",
-            status: "presente",
+            status: PRESENT,
         });
     }
     rows.push(PresenceRow {
         name: "OLLAMA",
-        status: if ollama_up { "ativo" } else { "inativo" },
+        status: if ollama_up { RUNNING } else { NOT_RUNNING },
     });
     rows
 }
@@ -206,6 +205,7 @@ pub fn presence_rows(copilot: bool, opencode: bool, ollama_up: bool) -> Vec<Pres
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_text::CURSOR_UNAVAILABLE;
 
     const NOW: i64 = 1_794_066_960; // 2026-11-07T15:56:00Z
     const CURSOR: &str = include_str!("../tests/fixtures/cursor_usage.json");
@@ -233,10 +233,10 @@ mod tests {
     }
 
     #[test]
-    fn gemini_120_of_1000_is_dia_120_1000_and_12_percent_marked_estimate() {
+    fn gemini_120_of_1000_shows_requests_and_12_percent_marked_estimate() {
         let s = gemini_state(&Is(true), &Count(Ok(120)), NOW);
         let l = usage_limit(&s, NOW);
-        assert_eq!(l.pct.text, "~dia 120/1000");
+        assert_eq!(l.pct.text, gemini_requests(120, 1000, true));
         assert_eq!(l.percent, 12.0);
         assert!(!l.pct.tip.is_empty());
     }
@@ -248,7 +248,10 @@ mod tests {
             limit: 1000,
             estimated: false,
         });
-        assert_eq!(usage_limit(&s, NOW).pct.text, "dia 120/1000");
+        assert_eq!(
+            usage_limit(&s, NOW).pct.text,
+            gemini_requests(120, 1000, false)
+        );
     }
 
     #[test]
@@ -275,7 +278,10 @@ mod tests {
     fn cursor_64_percent_resetting_in_18_days_is_mes_64_18d() {
         let s = cursor_state(&Is(true), &Cursor(Ok(CURSOR.to_owned())));
         let l = usage_limit(&s, NOW);
-        assert_eq!((l.pct.text.as_str(), l.reset.as_str()), ("mês 64%", "18d"));
+        assert_eq!(
+            (l.pct.text.as_str(), l.reset.as_str()),
+            (cursor_month_percent(64.0).as_str(), "18d")
+        );
         assert_eq!(l.percent, 64.0);
     }
 
@@ -288,7 +294,7 @@ mod tests {
         assert!(listed(&s, CURSOR_NOT_FOUND));
         let l = usage_limit(&s, NOW);
         assert_eq!(l.pct.text, "—");
-        assert_eq!(l.pct.tip, "uso do Cursor indisponível");
+        assert_eq!(l.pct.tip, CURSOR_UNAVAILABLE);
         assert!(!listed(
             &cursor_state(&Is(false), &Cursor(Ok(CURSOR.to_owned()))),
             CURSOR_NOT_FOUND
@@ -303,10 +309,10 @@ mod tests {
     fn copilot_folder_is_listed_present_and_ollama_follows_the_probe() {
         let up = presence_rows(true, false, true);
         assert_eq!(up.len(), 2);
-        assert_eq!((up[0].name, up[0].status), ("COPILOT", "presente"));
-        assert_eq!((up[1].name, up[1].status), ("OLLAMA", "ativo"));
+        assert_eq!((up[0].name, up[0].status), ("COPILOT", PRESENT));
+        assert_eq!((up[1].name, up[1].status), ("OLLAMA", RUNNING));
         let down = presence_rows(false, true, false);
         assert_eq!(down[0].name, "OPENCODE");
-        assert_eq!(down[1].status, "inativo");
+        assert_eq!(down[1].status, NOT_RUNNING);
     }
 }

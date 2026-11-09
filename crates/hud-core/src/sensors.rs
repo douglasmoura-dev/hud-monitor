@@ -1,13 +1,11 @@
 //! Temperature and GPU metrics built from abstract sensor sources.
 
 use crate::metrics::Metric;
+use crate::ui_text::{
+    GPU_IDLE, INTEL_GPU_UNAVAILABLE, NO_NVIDIA_DRIVER, NVIDIA_FAILED, THERMAL_UNAVAILABLE,
+    VRAM_UNAVAILABLE,
+};
 
-pub const THERMAL_UNAVAILABLE: &str = "sensor indisponível";
-pub const NO_NVIDIA_DRIVER: &str = "sem driver NVIDIA";
-pub const GPU_IDLE: &str = "GPU em repouso";
-pub const VRAM_UNAVAILABLE: &str = "VRAM indisponível neste driver";
-pub const NVIDIA_FAILED: &str = "leitura NVIDIA falhou";
-pub const INTEL_GPU_UNAVAILABLE: &str = "contador GPU Intel indisponível";
 const KELVIN_OFFSET: f64 = 273.15;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -197,7 +195,7 @@ mod tests {
     #[test]
     fn no_zones_is_unavailable_never_zero() {
         let t = thermal_metrics(&mut Zones(vec![]));
-        assert_eq!(t.cpu_c, Metric::unavailable("sensor indisponível"));
+        assert_eq!(t.cpu_c, Metric::unavailable(THERMAL_UNAVAILABLE));
     }
 
     #[test]
@@ -209,9 +207,9 @@ mod tests {
     #[test]
     fn missing_nvml_marks_nvidia_unavailable() {
         let n = nvidia_metrics(&mut Nv(Err(NvidiaError::NoDriver)));
-        assert_eq!(n.temp_c, Metric::unavailable("sem driver NVIDIA"));
-        assert_eq!(n.usage_percent, Metric::unavailable("sem driver NVIDIA"));
-        assert_eq!(n.vram, Metric::unavailable("sem driver NVIDIA"));
+        assert_eq!(n.temp_c, Metric::unavailable(NO_NVIDIA_DRIVER));
+        assert_eq!(n.usage_percent, Metric::unavailable(NO_NVIDIA_DRIVER));
+        assert_eq!(n.vram, Metric::unavailable(NO_NVIDIA_DRIVER));
     }
 
     #[test]

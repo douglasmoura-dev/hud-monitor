@@ -17,24 +17,34 @@ Base: [spec.md](spec.md) · Princípios: [constitution](../../.specify/memory/co
 | Fontes | Rajdhani + Share Tech Mono embutidas (OFL) | Visual aprovado |
 
 ## 2. Estrutura
+Regra de dependência para dentro ([ADR 0003](../../docs/adr/0003-clean-architecture.md)): `hud-app` depende de `hud-core`, nunca o contrário.
 ```
 hud-monitor/
 ├─ Cargo.toml                 (workspace)
 ├─ crates/
-│  ├─ hud-core/               lógica pura, 100% testável sem Windows
-│  │  ├─ metrics.rs           modelo de snapshot (Cpu, Mem, Gpu, Disk, Net, Thermal)
-│  │  ├─ config.rs            Config, Profile, WindowState, MiniBarItem, Thresholds
-│  │  ├─ alerts.rs            avalia snapshot × thresholds → Level {Ok, Warn, Crit}
-│  │  ├─ format.rs            "4.2 MB/s", "1h48", "~41%", "—"
-│  │  ├─ ai.rs                UsageWindow, ProviderStatus, parsers de JSON das IAs
-│  │  └─ cleanup.rs           regras de categorias, idade, marcação "revisar"
-│  └─ hud-app/                binário Windows
-│     ├─ sources/             traits + impls reais (system, thermal, gpu, ping, net_daily)
-│     ├─ ai/                  claude.rs, codex.rs, gemini.rs, cursor.rs, presence.rs
-│     ├─ cleanup/             scanner (walk) + recycle (Shell IFileOperation)
-│     ├─ shell/               tray, hotkeys, dwm (acrílico, click-through), autostart
-│     ├─ ui/                  hud.slint, minibar.slint, scanner.slint, settings.slint, theme.slint
-│     └─ main.rs              agenda: sistema 1 Hz, IAs 60 s, scanner sob demanda
+│  ├─ hud-core/               domínio + casos de uso + portas; sem Windows, Slint, HTTP nem arquivo real
+│  │  ├─ metrics.rs, sensors.rs   snapshot e coletor sobre portas (SystemSource, DiskIoSource, DayStore)
+│  │  ├─ config.rs            Config, Profile, WindowState, MiniBarItem, Thresholds (TOML de/para texto)
+│  │  ├─ alerts.rs            snapshot × thresholds → Level {Ok, Warn, Crit}
+│  │  ├─ ai.rs, extras.rs     provedores das IAs, parsers, portas (CredentialsSource, UsageApi, ...)
+│  │  ├─ view.rs              view models (Field, HudView, Chip, ClaudeView) prontos para a UI
+│  │  ├─ dashboard.rs         caso de uso: amostra + provedores → DashboardView e escalonamento de alerta
+│  │  ├─ windowing.rs         caso de uso: janelas, perfis, fixar, sair; portas WindowHost e ConfigStore
+│  │  ├─ cleanup.rs, removal.rs   regras do scanner e da remoção; portas ScanFs, SystemProbe, Recycler
+│  │  ├─ integration.rs, appearance.rs, position.rs, format.rs
+│  │  ├─ ui_text.rs           todo texto visto pelo usuário (português)
+│  │  └─ tests/dependency_rule.rs   falha se o core depender de crate de plataforma
+│  └─ hud-app/                adaptadores + apresentação + composição (binário Windows)
+│     ├─ sources/             implementações reais das portas (sysinfo, PDH, NVML, ping, ureq, arquivos)
+│     ├─ winffi.rs            único módulo com `unsafe`
+│     ├─ shell.rs, store.rs   bandeja, atalhos, visual nativo, autostart; config.toml em %APPDATA%
+│     ├─ collect.rs, ai.rs    threads de coleta (1 Hz, ping 5 s) e de IAs (60 s)
+│     ├─ clock.rs             relógio do sistema
+│     ├─ presentation/        tipos gerados do Slint, mapeamento view model → Slint, WindowHost do Slint
+│     ├─ scanner.rs           janela e threads do scanner/remoção
+│     ├─ runtime.rs           timers de 1 Hz e 100 ms ligando fontes, casos de uso e telas
+│     ├─ ui/                  hud.slint, minibar.slint, scanner.slint, theme.slint
+│     └─ main.rs              composition root (≤ 120 linhas, sem lógica)
 └─ .github/workflows/ci.yml   fmt, clippy -D warnings, test, build release (windows-latest)
 ```
 

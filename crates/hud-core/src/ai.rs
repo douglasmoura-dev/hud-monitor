@@ -5,25 +5,26 @@
 //! ever handed to `UsageApi`.
 
 use crate::metrics::Metric;
+use crate::ui_text::{
+    ai_error_reason, invalid_date, missing_window, CLAUDE_NOT_FOUND, CLAUDE_RENEW_LOGIN_TIP,
+    CODEX_NOT_FOUND, CODEX_RENEW_LOGIN_TIP, NO_LIMIT_WINDOWS, PRIMARY_WINDOW, RESET_NOW,
+    SECONDARY_WINDOW,
+};
 use crate::view::ClaudeState;
 use serde::Deserialize;
 use std::fmt;
 
-pub const CODEX_NOT_FOUND: &str = "Codex não encontrado";
-pub const CODEX_RENEW_LOGIN_TIP: &str = "abra o Codex para renovar o login";
-const NOT_FOUND: &str = "Claude Code não encontrado";
-pub const RENEW_LOGIN_TIP: &str = "abra o Claude Code para renovar o login";
 const FIVE_HOURS: i64 = 5 * 3600;
 const SEVEN_DAYS: i64 = 7 * 86400;
 const SECS_PER_DAY: i64 = 86400;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum AiError {
-    #[error("credenciais ilegíveis: {0}")]
+    #[error("unreadable credentials: {0}")]
     Credentials(String),
-    #[error("resposta de limites inválida: {0}")]
+    #[error("invalid limits response: {0}")]
     Response(String),
-    #[error("logs locais ilegíveis: {0}")]
+    #[error("unreadable local logs: {0}")]
     Logs(String),
     /// Reason shown as `—` when a provider has no usable data and no local fallback.
     #[error("{0}")]
@@ -32,7 +33,7 @@ pub enum AiError {
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ApiError {
-    #[error("login expirado")]
+    #[error("login expired")]
     Unauthorized,
     #[error("{0}")]
     Other(String),
@@ -102,8 +103,8 @@ struct RawUsage {
 }
 
 fn official(w: &RawWindow) -> Result<Reading, AiError> {
-    let resets_at = parse_rfc3339(&w.resets_at)
-        .ok_or_else(|| AiError::Response(format!("data inválida `{}`", w.resets_at)))?;
+    let resets_at =
+        parse_rfc3339(&w.resets_at).ok_or_else(|| AiError::Response(invalid_date(&w.resets_at)))?;
     Ok(Reading::Official {
         percent: w.utilization,
         resets_at,
@@ -207,7 +208,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 pub fn format_reset_in(resets_at: i64, now: i64) -> String {
     let left = resets_at - now;
     if left <= 0 {
-        return "agora".to_owned();
+        return RESET_NOW.to_owned();
     }
     if left >= SECS_PER_DAY {
         return format!("{}d", left / SECS_PER_DAY);
@@ -331,7 +332,7 @@ impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> AiProvider
         let text = self
             .credentials
             .read()?
-            .ok_or_else(|| AiError::Credentials(NOT_FOUND.to_owned()))?;
+            .ok_or_else(|| AiError::Credentials(CLAUDE_NOT_FOUND.to_owned()))?;
         let creds = parse_credentials(&text)?;
         match self.api.get(&creds.token) {
             Ok(body) => {
@@ -343,7 +344,7 @@ impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> AiProvider
                     tip: String::new(),
                 })
             }
-            Err(ApiError::Unauthorized) => self.estimate(creds.plan, RENEW_LOGIN_TIP, now),
+            Err(ApiError::Unauthorized) => self.estimate(creds.plan, CLAUDE_RENEW_LOGIN_TIP, now),
             Err(ApiError::Other(reason)) => self.estimate(creds.plan, &reason, now),
         }
     }
@@ -352,11 +353,11 @@ impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> AiProvider
 /// Runs one poll: `Unavailable(reason)` when the tool is missing or the data cannot be read.
 pub fn claude_state(provider: &impl AiProvider, now: i64) -> ClaudeState {
     if !provider.detect() {
-        return Metric::unavailable(NOT_FOUND);
+        return Metric::unavailable(CLAUDE_NOT_FOUND);
     }
     match provider.fetch(now) {
         Ok(status) => Metric::Available(status),
-        Err(e) => Metric::Unavailable(e.to_string()),
+        Err(e) => Metric::Unavailable(ai_error_reason(&e)),
     }
 }
 
@@ -380,7 +381,7 @@ struct RawCodexUsage {
 }
 
 fn codex_reading(w: Option<RawCodexWindow>, name: &str, now: i64) -> Result<Reading, AiError> {
-    let w = w.ok_or_else(|| AiError::Response(format!("janela {name} ausente")))?;
+    let w = w.ok_or_else(|| AiError::Response(missing_window(name)))?;
     Ok(Reading::Official {
         percent: w.used_percent,
         resets_at: now + w.reset_after_seconds,
@@ -394,10 +395,10 @@ pub fn parse_codex_usage(body: &str, now: i64) -> Result<(Reading, Reading), AiE
         serde_json::from_str(body).map_err(|e| AiError::Response(e.to_string()))?;
     let limits = raw
         .rate_limit
-        .ok_or_else(|| AiError::Response("sem janelas de limite".to_owned()))?;
+        .ok_or_else(|| AiError::Response(NO_LIMIT_WINDOWS.to_owned()))?;
     Ok((
-        codex_reading(limits.primary_window, "primária", now)?,
-        codex_reading(limits.secondary_window, "secundária", now)?,
+        codex_reading(limits.primary_window, PRIMARY_WINDOW, now)?,
+        codex_reading(limits.secondary_window, SECONDARY_WINDOW, now)?,
     ))
 }
 
@@ -479,7 +480,7 @@ pub fn codex_state(provider: &impl AiProvider, now: i64) -> ClaudeState {
     }
     match provider.fetch(now) {
         Ok(status) => Metric::Available(status),
-        Err(e) => Metric::Unavailable(e.to_string()),
+        Err(e) => Metric::Unavailable(ai_error_reason(&e)),
     }
 }
 
@@ -550,10 +551,7 @@ mod tests {
     fn codex_without_auth_json_is_not_listed() {
         let p = codex(None, Ok(CODEX_USAGE.to_owned()));
         assert!(!p.detect());
-        assert_eq!(
-            codex_state(&p, NOW),
-            Metric::unavailable("Codex não encontrado")
-        );
+        assert_eq!(codex_state(&p, NOW), Metric::unavailable(CODEX_NOT_FOUND));
     }
 
     #[test]
@@ -561,7 +559,7 @@ mod tests {
         let p = codex(Some(CODEX_AUTH), Err(ApiError::Unauthorized));
         assert_eq!(
             codex_state(&p, NOW),
-            Metric::unavailable("abra o Codex para renovar o login")
+            Metric::unavailable(CODEX_RENEW_LOGIN_TIP)
         );
     }
 
@@ -658,7 +656,7 @@ mod tests {
     fn reset_format_covers_minutes_and_past() {
         assert_eq!(format_reset_in(NOW + 35 * 60, NOW), "35min");
         assert_eq!(format_reset_in(NOW + 5, NOW), "1min");
-        assert_eq!(format_reset_in(NOW - 1, NOW), "agora");
+        assert_eq!(format_reset_in(NOW - 1, NOW), RESET_NOW);
         assert_eq!(format_reset_in(NOW + 3600, NOW), "1h00");
     }
 
@@ -700,7 +698,7 @@ mod tests {
             .unwrap();
         assert_eq!(s.five_hour, Reading::Estimate { tokens: 1_200_000 });
         assert_eq!(s.seven_day, Reading::Estimate { tokens: 9_000_000 });
-        assert_eq!(s.tip, "abra o Claude Code para renovar o login");
+        assert_eq!(s.tip, CLAUDE_RENEW_LOGIN_TIP);
         assert_eq!(s.plan.as_deref(), Some("PRO"));
     }
 
@@ -708,12 +706,12 @@ mod tests {
     fn network_failure_also_estimates_with_its_own_reason() {
         let s = provider(
             Some(CREDS_MAX),
-            Err(ApiError::Other("sem conexão".into())),
+            Err(ApiError::Other("no connection".into())),
             TokenSums::default(),
         )
         .fetch(NOW)
         .unwrap();
-        assert_eq!(s.tip, "sem conexão");
+        assert_eq!(s.tip, "no connection");
         assert_eq!(s.plan.as_deref(), Some("MAX"));
     }
 
@@ -766,7 +764,7 @@ mod tests {
         let none = provider(None, Err(ApiError::Unauthorized), TokenSums::default());
         assert_eq!(
             claude_state(&none, NOW),
-            Metric::unavailable("Claude Code não encontrado")
+            Metric::unavailable(CLAUDE_NOT_FOUND)
         );
         let bad = provider(Some("{"), Err(ApiError::Unauthorized), TokenSums::default());
         assert!(matches!(claude_state(&bad, NOW), Metric::Unavailable(_)));
@@ -782,7 +780,7 @@ mod tests {
     fn no_output_of_a_full_run_contains_the_token() {
         let failing = provider(
             Some(CREDS_PRO),
-            Err(ApiError::Other("falha de rede".into())),
+            Err(ApiError::Other("network failure".into())),
             TokenSums::default(),
         );
         let outputs = [

@@ -1,9 +1,8 @@
 //! Persisted configuration: window states, mini bar, profiles, thresholds, hotkeys.
 
 use crate::appearance::MIN_OPACITY;
-use crate::position::{first_run_position, Size, MARGIN};
+use crate::position::{first_run_position, Point, Size, MARGIN};
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::Path};
 
 /// Single source of truth for the HUD window size (the Slint literal in hud-app must match).
 /// HUD height with only Claude listed; `HUD_SIZE` is the tallest layout (every provider listed).
@@ -39,14 +38,10 @@ const DEFAULT_TOGGLE_MINIBAR: &str = "Ctrl+Alt+M";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("config file not found")]
-    NotFound,
     #[error("invalid config field `{field}`")]
     Invalid { field: &'static str },
     #[error("config is not valid TOML: {0}")]
     Parse(String),
-    #[error("config io: {0}")]
-    Io(#[from] io::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,6 +284,14 @@ impl Config {
         }
     }
 
+    /// Stores where the user left both windows.
+    pub fn record_positions(&mut self, hud: Point, minibar: Point) {
+        self.hud.x = hud.x;
+        self.hud.y = hud.y;
+        self.minibar.window.x = minibar.x;
+        self.minibar.window.y = minibar.y;
+    }
+
     /// Alert escalation: when both windows are hidden, shows the mini bar. Returns whether it changed.
     pub fn reveal_minibar_if_hidden(&mut self) -> bool {
         let both_hidden = !self.hud.visible && !self.minibar.window.visible;
@@ -321,62 +324,32 @@ impl Config {
         self.validate()?;
         toml::to_string_pretty(self).map_err(|e| ConfigError::Parse(e.to_string()))
     }
-
-    pub fn load(path: &Path) -> Result<Config, ConfigError> {
-        match fs::read_to_string(path) {
-            Ok(text) => Config::from_toml(&text),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Err(ConfigError::NotFound),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
-        let text = self.to_toml()?;
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        fs::write(path, text)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
 
     const SCREEN: Size = Size {
         width: 1920,
         height: 1080,
     };
 
-    fn temp(name: &str) -> std::path::PathBuf {
-        env::temp_dir().join(format!("hud-core-test-{}-{name}", std::process::id()))
-    }
-
     fn with_profiles() -> Config {
         let mut c = Config::first_run(SCREEN);
         c.profiles = vec![
             Profile {
-                name: "Trabalho".into(),
+                name: "Work".into(),
                 items: vec![MiniBarItem::Cpu, MiniBarItem::Ram],
                 orientation: Orientation::Horizontal,
             },
             Profile {
-                name: "Jogo".into(),
+                name: "Game".into(),
                 items: vec![MiniBarItem::Temp, MiniBarItem::Ping, MiniBarItem::Cpu],
                 orientation: Orientation::Vertical,
             },
         ];
         c
-    }
-
-    #[test]
-    fn load_missing_file_is_not_found() {
-        assert!(matches!(
-            Config::load(&temp("missing")),
-            Err(ConfigError::NotFound)
-        ));
     }
 
     #[test]
@@ -407,25 +380,22 @@ mod tests {
     }
 
     #[test]
-    fn save_and_reload_is_structurally_equal() {
-        let path = temp("roundtrip");
+    fn serialize_and_reload_is_structurally_equal() {
         let c = with_profiles();
-        c.save(&path).unwrap();
-        let loaded = Config::load(&path).unwrap();
-        fs::remove_file(path).unwrap();
+        let loaded = Config::from_toml(&c.to_toml().unwrap()).unwrap();
         assert_eq!(loaded, c);
     }
 
     #[test]
     fn switching_profile_applies_saved_items() {
         let mut c = Config::from_toml(&with_profiles().to_toml().unwrap()).unwrap();
-        c.switch_profile("Jogo").unwrap();
+        c.switch_profile("Game").unwrap();
         assert_eq!(
             c.minibar.items,
             [MiniBarItem::Temp, MiniBarItem::Ping, MiniBarItem::Cpu]
         );
         assert_eq!(c.minibar.orientation, Orientation::Vertical);
-        assert_eq!(c.active_profile.as_deref(), Some("Jogo"));
+        assert_eq!(c.active_profile.as_deref(), Some("Game"));
     }
 
     #[test]
@@ -467,7 +437,7 @@ mod tests {
     #[test]
     fn duplicate_profile_names_are_invalid() {
         let mut c = with_profiles();
-        c.profiles[1].name = "Trabalho".into();
+        c.profiles[1].name = "Work".into();
         assert!(matches!(
             c.validate(),
             Err(ConfigError::Invalid {

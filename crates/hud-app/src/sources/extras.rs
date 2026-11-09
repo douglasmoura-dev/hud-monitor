@@ -2,9 +2,8 @@
 //! detection only checks that a file or folder exists.
 
 use hud_core::ai::{AiError, ApiError};
-use hud_core::extras::{
-    gemini_cutoff, tally_gemini_line, CursorUsageApi, Probe, RequestCounter, CURSOR_UNAVAILABLE,
-};
+use hud_core::extras::{gemini_cutoff, tally_gemini_line, CursorUsageApi, Probe, RequestCounter};
+use hud_core::ui_text::CURSOR_UNAVAILABLE;
 use std::{
     collections::HashSet,
     fs::{self, File},
@@ -188,7 +187,7 @@ mod tests {
     fn cursor_without_source_reports_why() {
         assert_eq!(
             CursorNoSource.get(),
-            Err(ApiError::Other("uso do Cursor indisponível".to_owned()))
+            Err(ApiError::Other(CURSOR_UNAVAILABLE.to_owned()))
         );
     }
 

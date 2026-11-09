@@ -6,7 +6,9 @@ use crate::sources::{
 use crate::{store, winffi};
 use hud_core::metrics::{ping_metric, Collector, DayClock, Metric, PingSource, Snapshot};
 use hud_core::sensors::read_sensors;
+use hud_core::ui_text::{collection_unavailable, WAITING_FIRST_PING};
 use std::{
+    path::PathBuf,
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
         Arc, Mutex,
@@ -17,7 +19,6 @@ use std::{
 
 const TICK: Duration = Duration::from_secs(1);
 const PING_EVERY: Duration = Duration::from_secs(5);
-const PING_PENDING: &str = "aguardando a primeira medição";
 
 type SharedPing = Arc<Mutex<Metric<u32>>>;
 
@@ -39,7 +40,7 @@ impl Collection {
 /// Starts the collector threads.
 pub fn spawn() -> (Receiver<Snapshot>, Collection) {
     let (tx, rx) = mpsc::channel();
-    let ping: SharedPing = Arc::new(Mutex::new(Metric::unavailable(PING_PENDING)));
+    let ping: SharedPing = Arc::new(Mutex::new(Metric::unavailable(WAITING_FIRST_PING)));
     let ping_slot = ping.clone();
     let (ping_stop, ping_stop_rx) = mpsc::channel();
     let ping_worker = thread::spawn(move || ping_loop(IcmpPing::new(), &ping_slot, &ping_stop_rx));
@@ -64,11 +65,16 @@ fn ping_loop(mut source: impl PingSource, slot: &SharedPing, stop: &Receiver<()>
     }
 }
 
+fn open_system() -> Result<(SysinfoSource, PathBuf), String> {
+    let system = SysinfoSource::new().map_err(|e| collection_unavailable(&e.to_string()))?;
+    let dir = store::data_dir().map_err(|e| e.to_string())?;
+    Ok((system, dir))
+}
+
 fn snapshot_loop(tx: &Sender<Snapshot>, ping: &SharedPing, stop: &Receiver<()>) {
-    let (system, dir) = match (SysinfoSource::new(), store::data_dir()) {
-        (Ok(s), Ok(d)) => (s, d),
-        (Err(e), _) => return report_init_failure(tx, &format!("coleta indisponível: {e}")),
-        (_, Err(e)) => return report_init_failure(tx, &e.to_string()),
+    let (system, dir) = match open_system() {
+        Ok(opened) => opened,
+        Err(reason) => return report_init_failure(tx, &reason),
     };
     let start = Instant::now();
     let mut clock = DayClock::new(start.elapsed(), winffi::local_now);
@@ -86,7 +92,7 @@ fn snapshot_loop(tx: &Sender<Snapshot>, ping: &SharedPing, stop: &Receiver<()>) 
         last = Instant::now();
         let ping_now = ping
             .lock()
-            .map_or(Metric::unavailable(PING_PENDING), |g| g.clone());
+            .map_or(Metric::unavailable(WAITING_FIRST_PING), |g| g.clone());
         let today = clock.today(start.elapsed(), winffi::local_now);
         let sensors = read_sensors(&mut thermal, &mut nvidia, &mut intel);
         let snapshot = collector.tick(elapsed, today, ping_now, sensors);

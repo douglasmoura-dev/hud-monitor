@@ -1,30 +1,21 @@
 //! Background poller for the AI limits and tool presence: one fetch every 60 s, results sent to the UI thread.
 
+use crate::clock::unix_now;
 use crate::sources::{
     ollama_up, CursorNoSource, FileCredentials, GeminiLogs, JsonlScanner, PathProbe, UreqApi,
 };
 use hud_core::ai::{claude_state, codex_state, ClaudeProvider, CodexProvider};
-use hud_core::extras::{cursor_state, gemini_state, presence_rows, PresenceRow, Probe, UsageState};
-use hud_core::metrics::Metric;
-use hud_core::view::ClaudeState;
+use hud_core::dashboard::ProviderStates;
+use hud_core::extras::{cursor_state, gemini_state, presence_rows, PresenceRow, Probe};
+use hud_core::ui_text::{CLOCK_UNAVAILABLE, HOME_OR_CLOCK_UNAVAILABLE};
 use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 const POLL_EVERY: Duration = Duration::from_secs(60);
-pub const WAITING: &str = "aguardando a primeira leitura";
-
-/// Latest state of every AI provider.
-pub struct AiUpdate {
-    pub claude: ClaudeState,
-    pub codex: ClaudeState,
-    pub gemini: UsageState,
-    pub cursor: UsageState,
-    pub presence: Vec<PresenceRow>,
-}
 
 pub struct Poller {
     stop: Sender<()>,
@@ -38,63 +29,28 @@ impl Poller {
     }
 }
 
-/// Current time in Unix seconds, `None` if the clock is before 1970.
-pub fn unix_now() -> Option<i64> {
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    i64::try_from(secs).ok()
-}
-
 fn home() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").map(PathBuf::from)
 }
 
-pub fn spawn() -> (Receiver<AiUpdate>, Poller) {
+pub fn spawn() -> (Receiver<ProviderStates>, Poller) {
     let (tx, rx) = mpsc::channel();
     let (stop, stop_rx) = mpsc::channel();
     let worker = thread::spawn(move || poll_loop(&tx, &stop_rx));
     (rx, Poller { stop, worker })
 }
 
-fn poll_loop(tx: &Sender<AiUpdate>, stop: &Receiver<()>) {
+fn poll_loop(tx: &Sender<ProviderStates>, stop: &Receiver<()>) {
     let (Some(home), Some(_)) = (home(), unix_now()) else {
-        let reason = "pasta do usuário ou relógio indisponível";
-        let _ = tx.send(AiUpdate {
-            claude: Metric::unavailable(reason),
-            codex: Metric::unavailable(reason),
-            gemini: Metric::unavailable(reason),
-            cursor: Metric::unavailable(reason),
-            presence: Vec::new(),
-        });
+        let _ = tx.send(ProviderStates::all_unavailable(
+            HOME_OR_CLOCK_UNAVAILABLE,
+            Vec::new(),
+        ));
         return;
     };
-    let provider = ClaudeProvider {
-        credentials: FileCredentials::new(FileCredentials::default_path(&home)),
-        api: UreqApi::new(),
-        transcripts: JsonlScanner::new(JsonlScanner::default_root(&home)),
-    };
-    let codex = CodexProvider {
-        credentials: FileCredentials::new(FileCredentials::codex_path(&home)),
-        api: UreqApi::new(),
-    };
-    let sources = Extras::new(&home);
+    let sources = Sources::new(&home);
     loop {
-        let update = match unix_now() {
-            Some(now) => AiUpdate {
-                claude: claude_state(&provider, now),
-                codex: codex_state(&codex, now),
-                gemini: gemini_state(&sources.gemini_probe, &sources.gemini_logs, now),
-                cursor: cursor_state(&sources.cursor_probe, &CursorNoSource),
-                presence: sources.presence(),
-            },
-            None => AiUpdate {
-                claude: Metric::unavailable("relógio indisponível"),
-                codex: Metric::unavailable("relógio indisponível"),
-                gemini: Metric::unavailable("relógio indisponível"),
-                cursor: Metric::unavailable("relógio indisponível"),
-                presence: sources.presence(),
-            },
-        };
-        if tx.send(update).is_err() {
+        if tx.send(sources.poll()).is_err() {
             break;
         }
         if stop.recv_timeout(POLL_EVERY) != Err(RecvTimeoutError::Timeout) {
@@ -103,7 +59,10 @@ fn poll_loop(tx: &Sender<AiUpdate>, stop: &Receiver<()>) {
     }
 }
 
-struct Extras {
+/// Every real source one poll reads, built once per run.
+struct Sources {
+    claude: ClaudeProvider<FileCredentials, UreqApi, JsonlScanner>,
+    codex: CodexProvider<FileCredentials, UreqApi>,
     gemini_probe: PathProbe,
     gemini_logs: GeminiLogs,
     cursor_probe: PathProbe,
@@ -111,14 +70,36 @@ struct Extras {
     opencode: PathProbe,
 }
 
-impl Extras {
+impl Sources {
     fn new(home: &Path) -> Self {
         Self {
+            claude: ClaudeProvider {
+                credentials: FileCredentials::new(FileCredentials::default_path(home)),
+                api: UreqApi::new(),
+                transcripts: JsonlScanner::new(JsonlScanner::default_root(home)),
+            },
+            codex: CodexProvider {
+                credentials: FileCredentials::new(FileCredentials::codex_path(home)),
+                api: UreqApi::new(),
+            },
             gemini_probe: PathProbe(home.join(".gemini").join("oauth_creds.json")),
             gemini_logs: GeminiLogs::new(GeminiLogs::default_root(home)),
             cursor_probe: PathProbe(appdata(home).join("Cursor")),
             copilot: PathProbe(home.join(".copilot")),
             opencode: PathProbe(home.join(".local").join("share").join("opencode")),
+        }
+    }
+
+    fn poll(&self) -> ProviderStates {
+        let Some(now) = unix_now() else {
+            return ProviderStates::all_unavailable(CLOCK_UNAVAILABLE, self.presence());
+        };
+        ProviderStates {
+            claude: claude_state(&self.claude, now),
+            codex: codex_state(&self.codex, now),
+            gemini: gemini_state(&self.gemini_probe, &self.gemini_logs, now),
+            cursor: cursor_state(&self.cursor_probe, &CursorNoSource),
+            presence: self.presence(),
         }
     }
 

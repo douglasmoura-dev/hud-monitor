@@ -83,7 +83,7 @@ mod tests {
     }
 
     fn snapshot() -> Snapshot {
-        let mut s = Snapshot::unavailable("sem leitura");
+        let mut s = Snapshot::unavailable("no reading");
         s.unavailable = None;
         s.cpu.total = 10.0;
         s.mem.percent = 10;

@@ -5,6 +5,7 @@
 use crate::winffi;
 use hud_core::cleanup::{Entry, EntryKind, ScanError, ScanFs, SystemProbe, Usage};
 use hud_core::removal::Recycler;
+use hud_core::ui_text::{ALREADY_GONE, IN_USE_OR_DENIED, LINK_NOT_FOLLOWED};
 use std::{
     fs::{self, Metadata},
     io::ErrorKind,
@@ -99,19 +100,15 @@ impl SystemProbe for WinSystem {
 /// Real Recycle Bin backend (`IFileOperation` with recycle-on-delete).
 pub struct ShellRecycler;
 
-const LINK_REASON: &str = "é um link ou junção; não é seguido";
-const GONE_REASON: &str = "já não existe";
-const STUCK_REASON: &str = "em uso por outro programa ou sem permissão";
-
 /// Checked right before recycling: only plain files and folders are handed to the shell.
 fn eligible(path: &Path) -> Result<(), String> {
     match StdFs.stat(path) {
         Ok(Entry {
             kind: EntryKind::Link,
             ..
-        }) => Err(LINK_REASON.to_owned()),
+        }) => Err(LINK_NOT_FOLLOWED.to_owned()),
         Ok(_) => Ok(()),
-        Err(ScanError::NotFound) => Err(GONE_REASON.to_owned()),
+        Err(ScanError::NotFound) => Err(ALREADY_GONE.to_owned()),
         Err(ScanError::Io(reason)) => Err(reason),
     }
 }
@@ -139,7 +136,7 @@ impl Recycler for ShellRecycler {
             .map(|(path, check)| {
                 check?;
                 if still_there(path) {
-                    Err(STUCK_REASON.to_owned())
+                    Err(IN_USE_OR_DENIED.to_owned())
                 } else {
                     Ok(())
                 }
@@ -340,8 +337,8 @@ mod tests {
         assert!(make_junction(&link, &outside), "mklink /J");
         let missing = scanned.join("gone.tmp");
         let results = ShellRecycler.recycle(&[link.clone(), missing]);
-        assert_eq!(results[0], Err(LINK_REASON.to_owned()));
-        assert_eq!(results[1], Err(GONE_REASON.to_owned()));
+        assert_eq!(results[0], Err(LINK_NOT_FOLLOWED.to_owned()));
+        assert_eq!(results[1], Err(ALREADY_GONE.to_owned()));
         assert!(
             outside.join("big.bin").exists(),
             "junction target untouched"

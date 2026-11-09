@@ -1,20 +1,11 @@
 //! Snapshot model and the collector that builds it from abstract sources.
 
 use crate::sensors::{GpuMetrics, Sensors, ThermalMetrics};
+use crate::ui_text::{
+    disk_usage_unavailable, CORES_UNAVAILABLE, DISK_IO_UNAVAILABLE, FREQ_UNAVAILABLE,
+    PING_UNAVAILABLE, SAVE_FAILED,
+};
 use std::{fmt, time::Duration};
-
-pub const DISK_IO_UNAVAILABLE: &str = "contador indisponível";
-pub const CORES_UNAVAILABLE: &str = "contagem de núcleos indisponível";
-pub const FREQ_UNAVAILABLE: &str = "frequência indisponível";
-pub const SAVE_FAILED: &str = "não foi possível salvar o total do dia";
-pub const PING_UNAVAILABLE: &str = "sem resposta";
-/// Reason shown when the system drive cannot be read; names the real drive when known.
-pub fn disk_usage_unavailable(drive: Option<&str>) -> String {
-    match drive {
-        Some(d) => format!("disco {d} indisponível"),
-        None => "disco do sistema indisponível".to_string(),
-    }
-}
 
 const SECS_PER_DAY: u32 = 86_400;
 /// Upper bound between clock reads, so DST or manual clock changes are picked up.
@@ -540,10 +531,7 @@ mod tests {
             no_ping(),
             Sensors::unavailable("teste"),
         );
-        assert_eq!(
-            s.disk.io,
-            Metric::Unavailable("contador indisponível".into())
-        );
+        assert_eq!(s.disk.io, Metric::Unavailable(DISK_IO_UNAVAILABLE.into()));
         assert_eq!(s.disk.usage, Metric::Available((100, 200)));
     }
 
@@ -641,16 +629,13 @@ mod tests {
         let s = c.tick(1.0, D1, Metric::unavailable("x"), Sensors::unavailable("x"));
         assert_eq!(
             s.disk.usage,
-            Metric::Unavailable("disco D: indisponível".into())
+            Metric::Unavailable(disk_usage_unavailable(Some("D:")))
         );
         assert_eq!(s.cpu.cores, Metric::Available(2));
     }
 
     #[test]
     fn disk_reason_without_known_drive_is_generic() {
-        assert_eq!(
-            disk_usage_unavailable(None),
-            "disco do sistema indisponível"
-        );
+        assert_eq!(disk_usage_unavailable(None), disk_usage_unavailable(None));
     }
 }

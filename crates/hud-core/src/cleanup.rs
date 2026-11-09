@@ -5,6 +5,9 @@
 
 use crate::format;
 use crate::metrics::Metric;
+use crate::ui_text::{
+    category, item_count, missing_env_var, DOCKER_HINT, NEEDS_ADMIN, PARTIAL_READ_TIP,
+};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -12,8 +15,6 @@ pub const DAY_SECS: u64 = 24 * 60 * 60;
 pub const TEMP_MIN_AGE_SECS: u64 = DAY_SECS;
 pub const NODE_MODULES_MIN_AGE_SECS: u64 = 90 * DAY_SECS;
 pub const DOWNLOADS_MIN_AGE_SECS: u64 = 180 * DAY_SECS;
-pub const NEEDS_ADMIN: &str = "precisa de admin";
-pub const DOCKER_HINT: &str = "rode `docker system df` no terminal; o app não apaga nada do Docker";
 pub(crate) const PROJECT_MAX_DEPTH: u32 = 5;
 
 /// Folders never searched for projects: hidden ones (`.git`, `.venv`, `.cache`) and build output.
@@ -99,14 +100,14 @@ pub enum CategoryId {
 impl CategoryId {
     pub fn name(self) -> &'static str {
         match self {
-            CategoryId::Temp => "Temporários",
-            CategoryId::RecycleBin => "Lixeira",
-            CategoryId::BrowserCache => "Cache de navegadores",
-            CategoryId::NodeModules => "node_modules antigos",
-            CategoryId::PackageCaches => "Caches de pacotes",
-            CategoryId::WindowsUpdate => "Windows Update",
-            CategoryId::Docker => "Docker",
-            CategoryId::OldDownloads => "Downloads antigos",
+            CategoryId::Temp => category::TEMP,
+            CategoryId::RecycleBin => category::RECYCLE_BIN,
+            CategoryId::BrowserCache => category::BROWSER_CACHE,
+            CategoryId::NodeModules => category::NODE_MODULES,
+            CategoryId::PackageCaches => category::PACKAGE_CACHES,
+            CategoryId::WindowsUpdate => category::WINDOWS_UPDATE,
+            CategoryId::Docker => category::DOCKER,
+            CategoryId::OldDownloads => category::OLD_DOWNLOADS,
         }
     }
 
@@ -151,9 +152,7 @@ impl Category {
     /// Hover text: the reason for an unavailable value, or what was incomplete.
     pub fn tip(&self) -> String {
         match &self.usage {
-            Metric::Available(u) if u.incomplete => {
-                "algumas pastas não puderam ser lidas; o total é no mínimo este".to_owned()
-            }
+            Metric::Available(u) if u.incomplete => PARTIAL_READ_TIP.to_owned(),
             Metric::Available(_) => String::new(),
             Metric::Unavailable(reason) => reason.clone(),
         }
@@ -162,7 +161,7 @@ impl Category {
     /// Second line of a row: the reason when unavailable, a partial-read note, or the item count.
     pub fn detail(&self) -> String {
         match &self.usage {
-            Metric::Available(u) if !u.incomplete => format!("{} itens", u.items),
+            Metric::Available(u) if !u.incomplete => item_count(u.items),
             _ => self.tip(),
         }
     }
@@ -209,7 +208,7 @@ pub struct Roots {
 }
 
 fn under(var: Option<String>, name: &str, subs: &[&str]) -> Result<Vec<PathBuf>, String> {
-    let base = var.ok_or_else(|| format!("variável {name} ausente"))?;
+    let base = var.ok_or_else(|| missing_env_var(name))?;
     Ok(subs.iter().map(|s| Path::new(&base).join(s)).collect())
 }
 
@@ -440,6 +439,27 @@ fn measured_dir(result: &Result<PathBuf, String>, f: impl Fn(&Path) -> Usage) ->
     }
 }
 
+fn recycle_bin_usage(system: &dyn SystemProbe) -> Metric<Usage> {
+    match system.recycle_bin() {
+        Ok(u) => Metric::Available(u),
+        Err(reason) => Metric::Unavailable(reason),
+    }
+}
+
+/// Windows Update downloads can only be measured (and later removed) with admin rights.
+fn windows_update_usage(
+    w: &Walker,
+    system: &dyn SystemProbe,
+    roots: &Roots,
+    now: u64,
+) -> Metric<Usage> {
+    if system.is_admin() {
+        measured_dir(&roots.windows_update, |d| w.usage(d, now, None))
+    } else {
+        Metric::unavailable(NEEDS_ADMIN)
+    }
+}
+
 /// Measures every category and hands each one to `on_category` as soon as it is ready.
 /// Docker is omitted when it is not installed. Returns early when `cancel` is set.
 pub fn scan_all(
@@ -462,13 +482,7 @@ pub fn scan_all(
             w.usage_of_all(p, now, Some(TEMP_MIN_AGE_SECS))
         }),
     );
-    emit(
-        CategoryId::RecycleBin,
-        match system.recycle_bin() {
-            Ok(u) => Metric::Available(u),
-            Err(reason) => Metric::Unavailable(reason),
-        },
-    );
+    emit(CategoryId::RecycleBin, recycle_bin_usage(system));
     emit(
         CategoryId::BrowserCache,
         measured(&roots.browsers, |p| w.browser_caches(p, now)),
@@ -481,12 +495,10 @@ pub fn scan_all(
         CategoryId::PackageCaches,
         measured(&roots.packages, |p| w.usage_of_all(p, now, None)),
     );
-    let update = if system.is_admin() {
-        measured_dir(&roots.windows_update, |d| w.usage(d, now, None))
-    } else {
-        Metric::unavailable(NEEDS_ADMIN)
-    };
-    emit(CategoryId::WindowsUpdate, update);
+    emit(
+        CategoryId::WindowsUpdate,
+        windows_update_usage(&w, system, roots, now),
+    );
     if system.docker_installed() {
         emit(CategoryId::Docker, Metric::unavailable(DOCKER_HINT));
     }
@@ -671,7 +683,7 @@ mod tests {
         fs.file("C:\\wu", "a.cab", MIB, 3);
         let cats = scan(&fs, false, false);
         let wu = find(&cats, CategoryId::WindowsUpdate);
-        assert_eq!(wu.usage, Metric::unavailable("precisa de admin"));
+        assert_eq!(wu.usage, Metric::unavailable(NEEDS_ADMIN));
         assert!(!wu.checked && wu.review);
         let admin = scan(&fs, true, false);
         assert_eq!(bytes(find(&admin, CategoryId::WindowsUpdate)), MIB);
@@ -771,8 +783,8 @@ mod tests {
     #[test]
     fn missing_environment_variable_becomes_the_reason() {
         let r = Roots::from_lookup(|name| (name != "LOCALAPPDATA").then(|| "C:\\u".to_owned()));
-        assert_eq!(r.browsers.unwrap_err(), "variável LOCALAPPDATA ausente");
-        assert_eq!(r.packages.unwrap_err(), "variável LOCALAPPDATA ausente");
+        assert_eq!(r.browsers.unwrap_err(), missing_env_var("LOCALAPPDATA"));
+        assert_eq!(r.packages.unwrap_err(), missing_env_var("LOCALAPPDATA"));
         assert!(r.temp.is_ok() && r.downloads.is_ok());
     }
 
@@ -814,7 +826,7 @@ mod tests {
         c.toggle();
         assert!(!c.checked);
         assert_eq!(c.size_text(), "—");
-        assert_eq!(c.tip(), "precisa de admin");
+        assert_eq!(c.tip(), NEEDS_ADMIN);
     }
 
     #[test]
@@ -827,9 +839,9 @@ mod tests {
                 incomplete: false,
             }),
         );
-        assert_eq!(ok.detail(), "12 itens");
+        assert_eq!(ok.detail(), item_count(12));
         let no = Category::new(CategoryId::WindowsUpdate, Metric::unavailable(NEEDS_ADMIN));
-        assert_eq!(no.detail(), "precisa de admin");
+        assert_eq!(no.detail(), NEEDS_ADMIN);
     }
 
     #[test]
