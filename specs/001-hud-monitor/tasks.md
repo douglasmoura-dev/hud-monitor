@@ -19,3 +19,4 @@ Cada tarefa vira uma issue com o rótulo `spec-driven`. Critérios em [docs/eval
 | T13 | Mover para a Lixeira com confirmação | E13 | T12 |
 | T14 | Orçamento de memória e CPU + script de medição | E14 | T07, T11, T13 |
 | T15 | Temas visuais (5 temas prontos, troca ao vivo) | E15 | T14 |
+| T16 | Código em inglês, clean code e clean architecture (refatoração sem mudar o comportamento) | E16 | T13 |
