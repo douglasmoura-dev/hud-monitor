@@ -96,9 +96,17 @@ fn read_response(
         Ok(r) if r.status() == 200 => read_body(r),
         Ok(r) => Err(ApiError::Other(format!("HTTP {}", r.status()))),
         Err(ureq::Error::Status(401 | 403, _)) => Err(ApiError::Unauthorized),
+        Err(ureq::Error::Status(429, r)) => Err(ApiError::RateLimited {
+            retry_after: r.header("Retry-After").and_then(parse_retry_after),
+        }),
         Err(ureq::Error::Status(code, _)) => Err(ApiError::Other(format!("HTTP {code}"))),
         Err(ureq::Error::Transport(_)) => Err(ApiError::Other(no_connection(provider))),
     }
+}
+
+/// `Retry-After` in seconds; the HTTP-date form is ignored (the backoff covers it).
+fn parse_retry_after(value: &str) -> Option<u64> {
+    value.trim().parse().ok()
 }
 
 fn read_body(r: ureq::Response) -> Result<String, ApiError> {
@@ -259,6 +267,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn http_429_is_rate_limited_with_the_retry_after_seconds() {
+        let response = |header: Option<&str>| {
+            let head = header.map_or(String::new(), |v| format!("Retry-After: {v}\r\n"));
+            let raw = format!("HTTP/1.1 429 Too Many Requests\r\n{head}\r\n");
+            raw.parse::<ureq::Response>().unwrap()
+        };
+        let limited = |retry_after| Err(ApiError::RateLimited { retry_after });
+        assert_eq!(
+            read_response(Err(ureq::Error::Status(429, response(Some("120")))), "x"),
+            limited(Some(120))
+        );
+        assert_eq!(
+            read_response(Err(ureq::Error::Status(429, response(None))), "x"),
+            limited(None)
+        );
+        assert_eq!(
+            read_response(Err(ureq::Error::Status(429, response(Some("soon")))), "x"),
+            limited(None)
+        );
+        assert_eq!(parse_retry_after(" 30 "), Some(30));
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("hud-claude-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -336,11 +367,11 @@ mod tests {
         fs::create_dir_all(creds.parent().unwrap()).unwrap();
         fs::write(&creds, CREDS).unwrap();
         let before = hash(&creds);
-        let provider = ClaudeProvider {
-            credentials: FileCredentials::new(creds.clone()),
-            api: Unauthorized,
-            transcripts: JsonlScanner::new(JsonlScanner::default_root(&dir)),
-        };
+        let provider = ClaudeProvider::new(
+            FileCredentials::new(creds.clone()),
+            Unauthorized,
+            JsonlScanner::new(JsonlScanner::default_root(&dir)),
+        );
         assert!(provider.detect());
         let status = provider.fetch(NOW).unwrap();
         assert_eq!(status.five_hour, Reading::Estimate { tokens: 0 });

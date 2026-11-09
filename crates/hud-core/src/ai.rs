@@ -6,13 +6,14 @@
 
 use crate::metrics::Metric;
 use crate::ui_text::{
-    ai_error_reason, invalid_date, missing_window, CLAUDE_NOT_FOUND, CLAUDE_RENEW_LOGIN_TIP,
-    CODEX_NOT_FOUND, CODEX_RENEW_LOGIN_TIP, NO_LIMIT_WINDOWS, PRIMARY_WINDOW, RESET_NOW,
-    SECONDARY_WINDOW,
+    ai_error_reason, invalid_date, missing_window, stale_tip, API_RATE_LIMITED, CLAUDE_NOT_FOUND,
+    CLAUDE_RENEW_LOGIN_TIP, CODEX_NOT_FOUND, CODEX_RENEW_LOGIN_TIP, NO_LIMIT_WINDOWS,
+    PRIMARY_WINDOW, RESET_NOW, SECONDARY_WINDOW,
 };
 use crate::view::ClaudeState;
 use serde::Deserialize;
 use std::fmt;
+use std::sync::{Mutex, PoisonError};
 
 const FIVE_HOURS: i64 = 5 * 3600;
 const SEVEN_DAYS: i64 = 7 * 86400;
@@ -35,6 +36,9 @@ pub enum AiError {
 pub enum ApiError {
     #[error("login expired")]
     Unauthorized,
+    /// HTTP 429; `retry_after` is the `Retry-After` header in seconds, when sent.
+    #[error("rate limited")]
+    RateLimited { retry_after: Option<u64> },
     #[error("{0}")]
     Other(String),
 }
@@ -312,13 +316,87 @@ pub trait TranscriptScanner {
     fn sums(&self, now: i64) -> Result<TokenSums, AiError>;
 }
 
+/// Normal gap between two calls to the Claude usage endpoint.
+pub const CLAUDE_POLL_SECS: i64 = 300;
+/// Ceiling of the wait after HTTP 429.
+pub const CLAUDE_BACKOFF_MAX_SECS: i64 = 1800;
+
+/// Seconds to wait after the `streak`-th consecutive 429: the doubling backoff (5, 10, 20, 30,
+/// 30 min...) or the server's `Retry-After`, whichever is larger.
+pub fn rate_limit_delay(streak: u32, retry_after: Option<u64>) -> i64 {
+    let doublings = streak.saturating_sub(1).min(8);
+    let backoff = (CLAUDE_POLL_SECS << doublings).min(CLAUDE_BACKOFF_MAX_SECS);
+    let asked = retry_after.map_or(0, |s| i64::try_from(s).unwrap_or(i64::MAX));
+    backoff.max(asked)
+}
+
+/// The last successful API reading, kept to show while the API refuses to answer.
+#[derive(Debug, Clone)]
+struct GoodReading {
+    five_hour: Reading,
+    seven_day: Reading,
+    at: i64,
+}
+
+/// What the provider remembers between polls (the poller calls `fetch` every minute).
+#[derive(Debug, Default)]
+struct PollMemory {
+    last_good: Option<GoodReading>,
+    /// No API call before this instant.
+    next_attempt_at: i64,
+    rate_limited_streak: u32,
+    /// Why the last call failed; `None` when the last call succeeded.
+    failure: Option<String>,
+}
+
+impl PollMemory {
+    fn throttled(&self, now: i64) -> bool {
+        now < self.next_attempt_at && (self.last_good.is_some() || self.failure.is_some())
+    }
+
+    fn succeeded(&mut self, five_hour: Reading, seven_day: Reading, now: i64) {
+        self.last_good = Some(GoodReading {
+            five_hour,
+            seven_day,
+            at: now,
+        });
+        self.next_attempt_at = now + CLAUDE_POLL_SECS;
+        self.rate_limited_streak = 0;
+        self.failure = None;
+    }
+
+    fn rate_limited(&mut self, retry_after: Option<u64>, now: i64) {
+        self.rate_limited_streak = self.rate_limited_streak.saturating_add(1);
+        let delay = rate_limit_delay(self.rate_limited_streak, retry_after);
+        self.next_attempt_at = now.saturating_add(delay);
+        self.failure = Some(API_RATE_LIMITED.to_owned());
+    }
+
+    /// Any other failure is retried on the next poll.
+    fn failed(&mut self, reason: String) {
+        self.rate_limited_streak = 0;
+        self.next_attempt_at = 0;
+        self.failure = Some(reason);
+    }
+}
+
 pub struct ClaudeProvider<C, A, T> {
-    pub credentials: C,
-    pub api: A,
-    pub transcripts: T,
+    credentials: C,
+    api: A,
+    transcripts: T,
+    memory: Mutex<PollMemory>,
 }
 
 impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> ClaudeProvider<C, A, T> {
+    pub fn new(credentials: C, api: A, transcripts: T) -> Self {
+        Self {
+            credentials,
+            api,
+            transcripts,
+            memory: Mutex::new(PollMemory::default()),
+        }
+    }
+
     fn estimate(
         &self,
         plan: Option<String>,
@@ -337,6 +415,28 @@ impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> ClaudeProvider<C, 
             tip: tip.to_owned(),
         })
     }
+
+    /// What to show without a fresh answer: the last good reading (marked stale with its age
+    /// when the last call failed), or the local estimate when there never was one.
+    fn remembered(
+        &self,
+        memory: &PollMemory,
+        plan: Option<String>,
+        now: i64,
+    ) -> Result<ProviderStatus, AiError> {
+        match (&memory.last_good, &memory.failure) {
+            (Some(good), failure) => Ok(ProviderStatus {
+                plan,
+                five_hour: good.five_hour.clone(),
+                seven_day: good.seven_day.clone(),
+                tip: failure
+                    .as_deref()
+                    .map_or_else(String::new, |reason| stale_tip(now - good.at, reason)),
+            }),
+            (None, Some(reason)) => self.estimate(plan, reason, now),
+            (None, None) => self.estimate(plan, "", now),
+        }
+    }
 }
 
 impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> AiProvider
@@ -352,18 +452,28 @@ impl<C: CredentialsSource, A: UsageApi, T: TranscriptScanner> AiProvider
             .read()?
             .ok_or_else(|| AiError::Credentials(CLAUDE_NOT_FOUND.to_owned()))?;
         let creds = parse_credentials(&text)?;
+        let mut memory = self.memory.lock().unwrap_or_else(PoisonError::into_inner);
+        if memory.throttled(now) {
+            return self.remembered(&memory, creds.plan, now);
+        }
         match self.api.get(&creds.token) {
             Ok(body) => {
                 let (five_hour, seven_day) = parse_usage(&body)?;
-                Ok(ProviderStatus {
-                    plan: creds.plan,
-                    five_hour,
-                    seven_day,
-                    tip: String::new(),
-                })
+                memory.succeeded(five_hour, seven_day, now);
+                self.remembered(&memory, creds.plan, now)
             }
-            Err(ApiError::Unauthorized) => self.estimate(creds.plan, CLAUDE_RENEW_LOGIN_TIP, now),
-            Err(ApiError::Other(reason)) => self.estimate(creds.plan, &reason, now),
+            Err(ApiError::Unauthorized) => {
+                memory.failed(CLAUDE_RENEW_LOGIN_TIP.to_owned());
+                self.estimate(creds.plan, CLAUDE_RENEW_LOGIN_TIP, now)
+            }
+            Err(ApiError::RateLimited { retry_after }) => {
+                memory.rate_limited(retry_after, now);
+                self.remembered(&memory, creds.plan, now)
+            }
+            Err(ApiError::Other(reason)) => {
+                memory.failed(reason);
+                self.remembered(&memory, creds.plan, now)
+            }
         }
     }
 }
@@ -486,6 +596,7 @@ impl<C: CredentialsSource, A: CodexUsageApi> AiProvider for CodexProvider<C, A> 
                 })
             }
             Err(ApiError::Unauthorized) => Err(AiError::Api(CODEX_RENEW_LOGIN_TIP.to_owned())),
+            Err(ApiError::RateLimited { .. }) => Err(AiError::Api(API_RATE_LIMITED.to_owned())),
             Err(ApiError::Other(reason)) => Err(AiError::Api(reason)),
         }
     }
@@ -634,11 +745,7 @@ mod tests {
         api: Result<String, ApiError>,
         sums: TokenSums,
     ) -> ClaudeProvider<Creds, Api, Logs> {
-        ClaudeProvider {
-            credentials: Creds(creds),
-            api: Api(api),
-            transcripts: Logs(sums),
-        }
+        ClaudeProvider::new(Creds(creds), Api(api), Logs(sums))
     }
 
     #[test]
@@ -811,5 +918,168 @@ mod tests {
             ),
         ];
         assert!(outputs.iter().all(|o| !o.contains(FAKE_TOKEN)));
+    }
+
+    /// Answers one scripted result per call and counts the calls.
+    struct Scripted {
+        answers: std::cell::RefCell<std::collections::VecDeque<Result<String, ApiError>>>,
+        calls: std::cell::Cell<u32>,
+    }
+    impl UsageApi for &Scripted {
+        fn get(&self, _: &Secret) -> Result<String, ApiError> {
+            self.calls.set(self.calls.get() + 1);
+            self.answers
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or(Err(ApiError::Other("sem resposta".into())))
+        }
+    }
+
+    fn scripted(answers: Vec<Result<String, ApiError>>) -> Scripted {
+        Scripted {
+            answers: std::cell::RefCell::new(answers.into()),
+            calls: std::cell::Cell::new(0),
+        }
+    }
+
+    fn limited(retry_after: Option<u64>) -> Result<String, ApiError> {
+        Err(ApiError::RateLimited { retry_after })
+    }
+
+    fn claude(api: &Scripted) -> ClaudeProvider<Creds, &Scripted, Logs> {
+        let sums = TokenSums {
+            five_hour: 3_500_000,
+            seven_day: 9_000_000,
+        };
+        ClaudeProvider::new(Creds(Some(CREDS_PRO)), api, Logs(sums))
+    }
+
+    #[test]
+    fn rate_limit_without_a_prior_reading_shows_the_estimate_with_the_reason() {
+        let api = scripted(vec![limited(None)]);
+        let s = claude(&api).fetch(NOW).unwrap();
+        assert_eq!(s.five_hour, Reading::Estimate { tokens: 3_500_000 });
+        assert_eq!(s.tip, API_RATE_LIMITED);
+        assert_eq!(s.plan.as_deref(), Some("PRO"));
+    }
+
+    #[test]
+    fn rate_limit_keeps_the_last_reading_marked_stale_with_its_age() {
+        let api = scripted(vec![Ok(USAGE_OK.to_owned()), limited(None)]);
+        let p = claude(&api);
+        p.fetch(NOW).unwrap();
+        let s = p.fetch(NOW + 12 * 60 + CLAUDE_POLL_SECS).unwrap();
+        assert!(matches!(s.five_hour, Reading::Official { percent, .. } if percent == 72.0));
+        assert!(matches!(s.seven_day, Reading::Official { percent, .. } if percent == 41.0));
+        assert_eq!(s.tip, "dados de há 17 min — API limitou as consultas");
+    }
+
+    #[test]
+    fn stale_age_grows_while_the_backoff_holds_the_api_calls() {
+        let api = scripted(vec![Ok(USAGE_OK.to_owned()), limited(None)]);
+        let p = claude(&api);
+        p.fetch(NOW).unwrap();
+        p.fetch(NOW + 300).unwrap();
+        let s = p.fetch(NOW + 300 + 120).unwrap();
+        assert_eq!(api.calls.get(), 2);
+        assert_eq!(s.tip, "dados de há 7 min — API limitou as consultas");
+    }
+
+    #[test]
+    fn transient_errors_also_keep_the_last_reading() {
+        let api = scripted(vec![
+            Ok(USAGE_OK.to_owned()),
+            Err(ApiError::Other("sem conexão".into())),
+        ]);
+        let p = claude(&api);
+        p.fetch(NOW).unwrap();
+        let s = p.fetch(NOW + 600).unwrap();
+        assert!(matches!(s.five_hour, Reading::Official { .. }));
+        assert_eq!(s.tip, "dados de há 10 min — sem conexão");
+    }
+
+    #[test]
+    fn expired_login_still_falls_back_to_the_estimate_even_after_a_good_reading() {
+        let api = scripted(vec![Ok(USAGE_OK.to_owned()), Err(ApiError::Unauthorized)]);
+        let p = claude(&api);
+        p.fetch(NOW).unwrap();
+        let s = p.fetch(NOW + 600).unwrap();
+        assert!(matches!(s.five_hour, Reading::Estimate { .. }));
+        assert_eq!(s.tip, CLAUDE_RENEW_LOGIN_TIP);
+    }
+
+    #[test]
+    fn backoff_schedule_is_5_10_20_30_30_minutes() {
+        let minutes = |streak, ra| rate_limit_delay(streak, ra) / 60;
+        let schedule: Vec<i64> = (1..=5).map(|n| minutes(n, None)).collect();
+        assert_eq!(schedule, [5, 10, 20, 30, 30]);
+        assert_eq!(minutes(u32::MAX, None), 30);
+    }
+
+    #[test]
+    fn retry_after_wins_only_when_larger() {
+        assert_eq!(rate_limit_delay(1, Some(3600)), 3600);
+        assert_eq!(rate_limit_delay(3, Some(60)), 20 * 60);
+        assert_eq!(rate_limit_delay(1, Some(u64::MAX)), i64::MAX);
+    }
+
+    #[test]
+    fn the_api_is_not_called_again_before_the_poll_interval() {
+        let api = scripted(vec![Ok(USAGE_OK.to_owned())]);
+        let p = claude(&api);
+        for minute in 0..5 {
+            let s = p.fetch(NOW + minute * 60).unwrap();
+            assert!(s.tip.is_empty());
+            assert!(matches!(s.five_hour, Reading::Official { .. }));
+        }
+        assert_eq!(api.calls.get(), 1);
+        p.fetch(NOW + CLAUDE_POLL_SECS).unwrap();
+        assert_eq!(api.calls.get(), 2);
+    }
+
+    #[test]
+    fn consecutive_rate_limits_follow_the_schedule_and_success_resets_it() {
+        let api = scripted(vec![
+            limited(None),
+            limited(None),
+            limited(Some(45 * 60)),
+            Ok(USAGE_OK.to_owned()),
+            limited(None),
+        ]);
+        let p = claude(&api);
+        let mut t = NOW;
+        for wait in [5 * 60, 10 * 60, 45 * 60] {
+            p.fetch(t).unwrap();
+            let calls = api.calls.get();
+            p.fetch(t + wait - 1).unwrap();
+            assert_eq!(api.calls.get(), calls, "must wait {wait} s");
+            t += wait;
+        }
+        let ok = p.fetch(t).unwrap();
+        assert!(ok.tip.is_empty());
+        // After the success the next 429 starts again at 5 min, not at 20.
+        let t = t + CLAUDE_POLL_SECS;
+        p.fetch(t).unwrap();
+        let calls = api.calls.get();
+        p.fetch(t + 5 * 60 - 1).unwrap();
+        assert_eq!(api.calls.get(), calls);
+        p.fetch(t + 5 * 60).unwrap();
+        assert_eq!(api.calls.get(), calls + 1);
+    }
+
+    #[test]
+    fn stale_tip_formats_minutes_then_hours() {
+        assert_eq!(stale_tip(5, "x"), "dados de há 1 min — x");
+        assert_eq!(stale_tip(59 * 60, "x"), "dados de há 59 min — x");
+        assert_eq!(stale_tip(125 * 60, "x"), "dados de há 2h05 — x");
+    }
+
+    #[test]
+    fn codex_maps_rate_limit_to_a_reason() {
+        let p = codex(
+            Some(CODEX_AUTH),
+            Err(ApiError::RateLimited { retry_after: None }),
+        );
+        assert_eq!(p.fetch(NOW), Err(AiError::Api(API_RATE_LIMITED.to_owned())));
     }
 }

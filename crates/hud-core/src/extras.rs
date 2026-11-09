@@ -129,6 +129,7 @@ pub fn cursor_state(probe: &impl Probe, api: &impl CursorUsageApi) -> UsageState
             Err(e) => Metric::Unavailable(e.to_string()),
         },
         Err(ApiError::Unauthorized) => Metric::unavailable(CURSOR_RENEW_LOGIN_TIP),
+        Err(ApiError::RateLimited { .. }) => Metric::unavailable(crate::ui_text::API_RATE_LIMITED),
         Err(ApiError::Other(reason)) => Metric::Unavailable(reason),
     }
 }
