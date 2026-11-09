@@ -51,6 +51,17 @@ Desenvolvedor que usa várias IAs de código (Claude Pro, Codex, Gemini, Cursor,
 1. O usuário escolhe um tema pronto: **Gamer HUD** (atual, padrão), **Cyberpunk neon**, **Minimalista**, **Terminal retrô** ou **Claro**.
 2. O tema vale para o HUD, a barrinha e o scanner ao mesmo tempo e troca na hora, sem reiniciar, pelo menu da bandeja ou pelo `config.toml`.
 3. As cores de alerta (âmbar e vermelho) continuam legíveis em todos os temas.
+4. Cada tema tem identidade própria, não só outra cor: fonte, formato dos cantos, estilo das barras, enfeites e disposição mudam (protótipo aprovado em 2026-11-09):
+   - **Gamer HUD**: Rajdhani + Share Tech Mono, rótulos em caixa alta espaçada, barras finas, borda verde translúcida (o visual atual).
+   - **Cyberpunk neon**: Orbitron nos títulos e números, Chakra Petch no texto; faixa de título amarela com texto escuro, cantos cortados na diagonal, filete rosa à esquerda, barras em blocos segmentados, rótulos tipo `CPU_LOAD`.
+   - **Minimalista**: Inter fina, números grandes, rótulos em minúsculas, sem barras nem bordas, cantos bem arredondados, muito respiro; detalhes em uma linha de texto fraco.
+   - **Terminal retrô**: VT323 em tudo, fósforo verde sobre preto, linhas de varredura, barras em ASCII (`[#######.....]`), título como prompt (`user@hud:~$`), cursor piscando.
+   - **Claro**: fonte do sistema (Segoe UI), fundo claro, métricas em cartões brancos com ponto colorido de status, barras arredondadas.
+
+### C8 — Redimensionar
+1. O usuário redimensiona o HUD e a barrinha arrastando o canto inferior direito; tudo cresce ou encolhe por igual (fontes, barras, espaços), mantendo a proporção.
+2. Escala de 60% a 200%; o tamanho fica salvo por janela e volta ao reabrir.
+3. Funciona em todos os temas; no modo "clicar através" o redimensionamento só vale segurando Ctrl.
 
 ## Requisitos não funcionais
 - Memória privada ≤ 30 MB e CPU média ≤ 1% (ver constituição).
