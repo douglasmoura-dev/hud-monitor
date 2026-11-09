@@ -411,7 +411,8 @@ mod tests {
     use crate::metrics::{DiskMetrics, MemMetrics, NetMetrics, ProcessMem};
     use crate::sensors::Sensors;
     use crate::ui_text::{
-        CLAUDE_NOT_FOUND, CLAUDE_RENEW_LOGIN_TIP, CODEX_RENEW_LOGIN_TIP, DISK_IO_UNAVAILABLE,
+        CLAUDE_NOT_FOUND, CLAUDE_RENEW_LOGIN_TIP, CODEX_RENEW_LOGIN_TIP, CORES_UNAVAILABLE,
+        DISK_IO_UNAVAILABLE, THERMAL_UNAVAILABLE,
     };
 
     const NOW: i64 = 1_794_066_960;
@@ -441,7 +442,7 @@ mod tests {
     }
 
     fn snapshot(threads: Vec<f32>) -> Snapshot {
-        let sensors = Sensors::unavailable("no sensor");
+        let sensors = Sensors::unavailable(THERMAL_UNAVAILABLE);
         let above_50 = threads.iter().filter(|t| **t > 50.0).count();
         Snapshot {
             cpu: CpuMetrics {
@@ -526,7 +527,7 @@ mod tests {
     fn unavailable_metric_shows_dash_with_reason_tooltip() {
         let v = build(&snapshot(vec![10.0]));
         assert_eq!(v.cpu_temp.text, "—");
-        assert_eq!(v.cpu_temp.tip, "no sensor");
+        assert_eq!(v.cpu_temp.tip, THERMAL_UNAVAILABLE);
         assert_eq!(v.disk_io.text, "—");
         assert_eq!(v.disk_io.tip, DISK_IO_UNAVAILABLE);
         assert_eq!(v.cpu_freq.text, "3.4GHz");
@@ -555,10 +556,10 @@ mod tests {
     #[test]
     fn unknown_core_count_keeps_thread_count_and_explains() {
         let mut s = snapshot(vec![60.0]);
-        s.cpu.cores = Metric::unavailable("no core count");
+        s.cpu.cores = Metric::unavailable(CORES_UNAVAILABLE);
         let v = build(&s);
         assert_eq!(v.cpu_cores.text, format!("—/1T · {}", cores_above_half(1)));
-        assert_eq!(v.cpu_cores.tip, "no core count");
+        assert_eq!(v.cpu_cores.tip, CORES_UNAVAILABLE);
     }
 
     #[test]
@@ -584,7 +585,11 @@ mod tests {
             &[Cpu, Ram, Net, Claude5h],
             &snapshot(vec![10.0]),
             &thresholds(),
-            &claude_view(&Metric::unavailable("no login"), NOW, &thresholds()),
+            &claude_view(
+                &Metric::unavailable(CLAUDE_RENEW_LOGIN_TIP),
+                NOW,
+                &thresholds(),
+            ),
             &ClaudeView::default(),
         );
         let labels: Vec<_> = chips.iter().map(|c| c.label).collect();
@@ -593,7 +598,7 @@ mod tests {
         assert_eq!(chips[1].value.text, "50%");
         assert_eq!(chips[2].value.text, "4.2 MB/s");
         assert_eq!(chips[3].value.text, "—");
-        assert_eq!(chips[3].value.tip, "no login");
+        assert_eq!(chips[3].value.tip, CLAUDE_RENEW_LOGIN_TIP);
     }
 
     #[test]
