@@ -60,11 +60,11 @@ hud-monitor/
 | CPU total, por thread, frequência | `sysinfo` | — |
 | Temperatura | PDH `\Thermal Zone Information(*)\Temperature` (Kelvin → °C, maior zona) | `—` "sensor indisponível" |
 | GPU NVIDIA uso/VRAM/temp | NVML | GPU desligada/ausente → `—` "GPU em repouso" |
-| GPU Intel uso | PDH `\GPU Engine(*)\Utilization Percentage` (soma por adaptador) | `—` |
-| RAM e top 3 processos | `sysinfo` | — |
+| GPU Intel uso | PDH `\GPU Engine(*luid_<adaptador>*)\Utilization Percentage` (só o adaptador Intel, soma dos engines) | `—` |
+| RAM e top 3 processos | `sysinfo` (top 3 a cada 10 s) | — |
 | Disco usado/total | `sysinfo` | — |
 | Disco leitura/escrita | PDH `\PhysicalDisk(_Total)\Disk Read/Write Bytes/sec` | `—` |
-| Rede ↓/↑ | `sysinfo` networks, diferença por segundo, soma das interfaces ativas | — |
+| Rede ↓/↑ | `GetIfEntry2` sobre a lista de interfaces físicas (refeita a cada 30 s), diferença por segundo | — |
 | Rede total do dia | acumulado em `%APPDATA%\hud-monitor\net-YYYY-MM-DD.json`, zera à meia-noite local | — |
 | Ping | ICMP (`IcmpSendEcho`) para 1.1.1.1 a cada 5 s, timeout 1 s | `—` "sem resposta" |
 
@@ -97,9 +97,12 @@ Remoção: `IFileOperation` com `FOFX_RECYCLEONDELETE`, em thread de fundo, com 
 
 ## 7. Memória e desempenho
 - Renderizador de software do Slint, janelas pequenas; fontes subset (só Latin) para reduzir tamanho.
-- `sysinfo::System` criado uma vez e atualizado só nas partes usadas (`refresh_cpu_usage`, `refresh_memory`), processos a cada 5 s.
+- `sysinfo::System` criado uma vez e atualizado só nas partes usadas (`refresh_cpu_usage`, `refresh_memory`), processos a cada 10 s (T14: 5 s estourava o orçamento de CPU).
+- Transcrições do Claude lidas de forma incremental: só os bytes novos, com o progresso guardado por arquivo.
+- A tela só recebe as propriedades que mudaram; métricas seguem a 1 Hz. Timer de bandeja/atalho a 200 ms.
+- Orçamento: memória privada ≤ 30 MB e CPU média ≤ 1% de **um núcleo** (tempo de CPU / tempo de parede), medido com `scripts/measure.ps1` (HUD visível, 10 min, amostra de 1 s; `-Scanner` abre e fecha o scanner 5 vezes). Na T14: 16,1 MB e 0,99% (i5-7200U) — margem apertada.
 - Scanner libera os resultados ao fechar a janela.
-- CI publica o binário release; a issue de orçamento mede memória privada com HUD + barrinha por 10 min.
+- CI publica o binário release; o app mostra o HUD **ou** a barrinha, nunca os dois; a medição usa o HUD (mais pesado), e `-Window MiniBar` mede a barrinha.
 
 ## 8. Temas
 - `hud-core::theme`: enum `ThemeId { GamerHud, Cyberpunk, Minimal, Terminal, Light }` com serde (`gamer-hud`, `cyberpunk`, `minimal`, `terminal`, `light`) e uma paleta por tema (cores de destaque, texto, texto fraco, trilho das barras, fundo, borda, aviso, crítico, fonte de título/número). Campo `appearance.theme` no config com default `gamer-hud`, para configs antigas continuarem carregando.
