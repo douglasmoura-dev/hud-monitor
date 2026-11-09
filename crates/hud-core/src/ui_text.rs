@@ -128,6 +128,9 @@ pub const TRAY_SCANNER: &str = "Limpeza de disco...";
 pub const TRAY_PROFILES: &str = "Perfis";
 pub const TRAY_THEME: &str = "Tema";
 pub const TRAY_QUIT: &str = "Sair";
+pub const TRAY_PIN: &str = "Fixar HUD (ignorar mouse)";
+pub const PIN_TIP: &str =
+    "Fixar: o HUD ignora o mouse. Para soltar, segure Ctrl e clique aqui, ou use a bandeja.";
 
 /// Tray menu label of a theme.
 pub fn theme_name(theme: ThemeId) -> &'static str {

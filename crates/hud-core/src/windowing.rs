@@ -332,6 +332,8 @@ mod tests {
         assert_eq!(store.0.borrow().len(), 1);
         c.toggle_pin();
         assert_eq!(host.0.pinned.get(), Some(false));
+        let saved = store.0.borrow();
+        assert!(!saved.last().expect("saved").hud.click_through);
     }
 
     #[test]

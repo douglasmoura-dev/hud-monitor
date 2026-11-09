@@ -9,6 +9,7 @@ use crate::winffi;
 use hud_core::config::{Config, Orientation};
 use hud_core::position::{clamp_to_screen, Point, Size};
 use hud_core::theme::Palette;
+use hud_core::ui_text::PIN_TIP;
 use hud_core::view::minibar_size;
 use hud_core::windowing::{WindowController, WindowHost, WindowId};
 use slint::{ComponentHandle, PhysicalPosition};
@@ -126,6 +127,7 @@ pub fn apply_config(hud: &Hud, bar: &MiniBar, config: &Config, screen: Size) {
     paint_minibar(bar, &palette);
     hud.set_bg_alpha(effective_opacity(config.hud.opacity));
     hud.set_pinned(config.hud.click_through);
+    hud.set_pin_tip(PIN_TIP.into());
     bar.set_bg_alpha(effective_opacity(config.minibar.window.opacity));
     bar.set_vertical(config.minibar.orientation == Orientation::Vertical);
     let bar_size = minibar_size(config.minibar.items.len(), config.minibar.orientation);
