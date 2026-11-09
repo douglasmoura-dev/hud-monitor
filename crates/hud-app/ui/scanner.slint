@@ -13,7 +13,7 @@ export component Scanner inherits Window {
     title: "Limpeza de disco";
     width: 540px;
     height: 460px;
-    background: #0A0E14;
+    background: Theme.background;
     in property <[CleanRow]> rows;
     in property <string> total;
     in property <string> status;
@@ -202,7 +202,7 @@ export component Scanner inherits Window {
         y: 0px;
         width: root.width;
         height: root.height;
-        background: #0A0E14;
+        background: Theme.background;
         TouchArea { }
         Text {
             x: 16px;

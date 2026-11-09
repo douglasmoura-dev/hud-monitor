@@ -9,10 +9,6 @@ use crate::position::Size;
 use crate::ui_text::{cores_above_half, net_today, CODEX_NOT_FOUND, DISK_CHIP_LABEL, NO_PROCESSES};
 
 pub const DASH: &str = "—";
-pub const BAR_RED: u32 = 0x00E2_4B4A;
-pub const BAR_GREEN: u32 = 0x001D_9E75;
-pub const ALERT_WARN: u32 = 0x00EF_9F27;
-pub const ALERT_CRIT: u32 = BAR_RED;
 const HOT_THREAD_PERCENT: f32 = 80.0;
 
 /// Text shown in the HUD and the tooltip explaining why it is `—` (empty when available).
@@ -51,8 +47,8 @@ impl Field {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CoreBar {
     pub percent: f32,
-    /// `0xRRGGBB`.
-    pub color: u32,
+    /// Above the hot-thread limit; the theme picks the color.
+    pub hot: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -77,21 +73,8 @@ pub struct HudView {
     pub ping: Field,
 }
 
-pub fn bar_color(percent: f32) -> u32 {
-    if percent > HOT_THREAD_PERCENT {
-        BAR_RED
-    } else {
-        BAR_GREEN
-    }
-}
-
-/// Display colour of an alert level, `None` when there is nothing to flag.
-pub fn level_color(level: Level) -> Option<u32> {
-    match level {
-        Level::Ok => None,
-        Level::Warn => Some(ALERT_WARN),
-        Level::Crit => Some(ALERT_CRIT),
-    }
+pub fn is_hot(percent: f32) -> bool {
+    percent > HOT_THREAD_PERCENT
 }
 
 /// `build` plus alert levels on the fields that have thresholds.
@@ -179,7 +162,7 @@ pub fn build(s: &Snapshot) -> HudView {
             .iter()
             .map(|&percent| CoreBar {
                 percent,
-                color: bar_color(percent),
+                hot: is_hot(percent),
             })
             .collect(),
         ram: Field::ok(used_total_gb(s.mem.used, s.mem.total)),
@@ -503,9 +486,6 @@ mod tests {
         );
         assert_eq!(chips[0].value.level, Level::Crit);
         assert_eq!(chips[1].value.level, Level::Warn);
-        assert_eq!(level_color(Level::Warn), Some(0xEF9F27));
-        assert_eq!(level_color(Level::Crit), Some(0xE24B4A));
-        assert_eq!(level_color(Level::Ok), None);
     }
 
     #[test]
@@ -516,11 +496,11 @@ mod tests {
     }
 
     #[test]
-    fn hot_thread_is_red_and_calm_thread_is_green() {
+    fn hot_thread_is_flagged_and_calm_thread_is_not() {
         let v = build(&snapshot(vec![85.0, 40.0]));
-        assert_eq!(v.core_bars[0].color, 0xE24B4A);
-        assert_eq!(v.core_bars[1].color, 0x1D9E75);
-        assert_eq!(bar_color(80.0), BAR_GREEN);
+        assert!(v.core_bars[0].hot);
+        assert!(!v.core_bars[1].hot);
+        assert!(!is_hot(80.0));
     }
 
     #[test]

@@ -10,7 +10,7 @@ export struct Field {
 
 export struct Bar {
     percent: float,
-    color: color,
+    hot: bool,
 }
 
 export struct Limit {
@@ -30,20 +30,24 @@ export struct ChipData {
 }
 
 export global Theme {
-    out property <color> teal: #5DCAA5;
-    out property <color> green: #1D9E75;
-    out property <color> purple: #7F77DD;
-    out property <color> amber: #EF9F27;
-    out property <color> blue: #85B7EB;
-    out property <color> text: #C9D4DD;
-    out property <color> dim: #7D8B97;
-    out property <color> track: #FFFFFF14;
-    out property <color> border: #1D9E7566;
-    out property <color> title-bar: #FFFFFF0A;
-    out property <color> tip-bar: #0E1620;
+    in-out property <color> teal: #5DCAA5;
+    in-out property <color> green: #1D9E75;
+    in-out property <color> purple: #7F77DD;
+    in-out property <color> amber: #EF9F27;
+    in-out property <color> blue: #85B7EB;
+    in-out property <color> text: #C9D4DD;
+    in-out property <color> dim: #7D8B97;
+    in-out property <color> track: #FFFFFF14;
+    in-out property <color> border: #1D9E7566;
+    in-out property <color> title-bar: #FFFFFF0A;
+    in-out property <color> tip-bar: #0E1620;
+    in-out property <color> background: #0A0E14;
+    in-out property <color> warn: #EF9F27;
+    in-out property <color> crit: #E24B4A;
+    in-out property <length> radius: 6px;
     pure public function tone(level: int, base: color) -> color {
-        level == 2 ? #E24B4A : level == 1 ? #EF9F27 : base
+        level == 2 ? crit : level == 1 ? warn : base
     }
-    out property <string> label-font: "Rajdhani";
-    out property <string> number-font: "Share Tech Mono";
+    in-out property <string> label-font: "Rajdhani";
+    in-out property <string> number-font: "Share Tech Mono";
 }

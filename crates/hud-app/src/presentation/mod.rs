@@ -2,12 +2,16 @@
 //! the window host. Decisions live in `hud-core`; this module only draws.
 
 mod mapping;
+mod theme;
 mod windows;
 
 pub use mapping::{clock_text, show_dashboard};
+pub use theme::slint_color;
 pub use windows::{apply_config, connect, Controller, Looks, SlintWindows};
 
 slint::include_modules!();
+
+pub use theme::{paint_hud, paint_minibar, paint_scanner};
 
 #[cfg(test)]
 mod tests {
@@ -43,6 +47,22 @@ mod tests {
     }
 
     #[test]
+    fn all_three_windows_draw_from_theme_properties_not_literal_colors() {
+        for src in [HUD, MINIBAR, SCANNER] {
+            assert!(src.contains("Theme.background"));
+            assert!(!src.contains("rgba(10, 14, 20"));
+            assert!(!src.contains("#0A0E14"));
+        }
+        assert!(THEME.contains("in-out property <color> warn"));
+        assert!(THEME.contains("in-out property <color> crit"));
+        assert!(!THEME.contains("    out property"));
+        assert!(
+            !THEME.contains("out property <color> teal")
+                || THEME.contains("in-out property <color> teal")
+        );
+    }
+
+    #[test]
     fn unavailable_values_report_their_reason_on_hover() {
         assert!(HUD.contains("root.field.tip != \"\""));
         assert!(HUD.contains("root.tip(self.has-hover ? root.field.tip"));
@@ -50,7 +70,7 @@ mod tests {
 
     #[test]
     fn bar_colors_come_from_the_view_not_the_slint_file() {
-        assert!(HUD.contains("background: bar.color"));
+        assert!(HUD.contains("bar.hot ? Theme.crit : Theme.green"));
     }
 
     #[test]

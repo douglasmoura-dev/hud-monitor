@@ -42,10 +42,10 @@ export component MiniBar inherits Window {
     callback quit();
 
     Rectangle {
-        background: rgba(10, 14, 20, root.bg-alpha);
+        background: Theme.background.with-alpha(root.bg-alpha);
         border-color: Theme.border;
         border-width: 1px;
-        border-radius: 6px;
+        border-radius: Theme.radius;
         TouchArea {
             moved => { root.moved(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
             pointer-event(e) => { if e.kind == PointerEventKind.up { root.released(); } }

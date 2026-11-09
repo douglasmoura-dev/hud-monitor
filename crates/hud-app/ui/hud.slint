@@ -2,7 +2,7 @@ import { Bar, Field, Limit, PresenceData, Theme } from "theme.slint";
 import { MiniBar } from "minibar.slint";
 import { CleanRow, Scanner } from "scanner.slint";
 
-export { CleanRow, MiniBar, Scanner }
+export { CleanRow, MiniBar, Scanner, Theme }
 
 component Label inherits Text {
     color: Theme.dim;
@@ -149,10 +149,10 @@ export component Hud inherits Window {
     property <string> hover-tip;
 
     Rectangle {
-        background: rgba(10, 14, 20, root.bg-alpha);
+        background: Theme.background.with-alpha(root.bg-alpha);
         border-color: Theme.border;
         border-width: 1px;
-        border-radius: 6px;
+        border-radius: Theme.radius;
         clip: true;
 
         // Title bar
@@ -250,7 +250,7 @@ export component Hud inherits Window {
             Rectangle {
                 y: parent.height * (1 - clamp(bar.percent, 0, 100) / 100);
                 height: parent.height - self.y;
-                background: bar.color;
+                background: bar.hot ? Theme.crit : Theme.green;
             }
         }
         Rule { x: 12px; y: 142px; width: parent.width - 24px; }

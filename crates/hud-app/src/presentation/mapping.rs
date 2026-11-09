@@ -14,10 +14,9 @@ pub fn field(f: &view::Field) -> Field {
 }
 
 pub fn bar(b: &view::CoreBar) -> Bar {
-    let [_, r, g, bl] = b.color.to_be_bytes();
     Bar {
         percent: b.percent,
-        color: slint::Color::from_rgb_u8(r, g, bl),
+        hot: b.hot,
     }
 }
 
@@ -168,13 +167,13 @@ mod tests {
     }
 
     #[test]
-    fn bar_color_unpacks_the_rgb_bytes() {
+    fn bar_keeps_percent_and_hot_flag() {
         let b = bar(&view::CoreBar {
             percent: 50.0,
-            color: 0x00E2_4B4A,
+            hot: true,
         });
         assert_eq!(b.percent, 50.0);
-        assert_eq!(b.color, slint::Color::from_rgb_u8(0xE2, 0x4B, 0x4A));
+        assert!(b.hot);
     }
 
     #[test]

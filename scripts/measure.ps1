@@ -10,6 +10,8 @@
   is printed too and is always lower.
   -Scanner opens and closes the scanner window 5 times (E14 second scenario, through the
   app's --scanner-cycles flag) and checks private memory is <= 30 MB within 10 s afterwards.
+  -Themes switches the theme 10 times through the tray code path (--theme-cycles flag, E15) and
+  checks private memory is <= 30 MB within 10 s afterwards.
 #>
 param(
     [string]$Exe = (Join-Path $(if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $PSScriptRoot '..\target' }) 'release\hud-app.exe'),
@@ -17,6 +19,7 @@ param(
     [int]$WarmupSeconds = 15,
     [ValidateSet('Hud', 'MiniBar')][string]$Window = 'Hud',
     [switch]$Scanner,
+    [switch]$Themes,
     [double]$MaxMemoryMb = 30,
     [double]$MaxCpuPercent = 1
 )
@@ -81,6 +84,7 @@ $cores = [Environment]::ProcessorCount
 $oldAppData = $env:APPDATA
 $env:APPDATA = $appData
 if ($Scanner) { $proc = Start-Process $Exe -ArgumentList '--scanner-cycles', '5' -PassThru }
+elseif ($Themes) { $proc = Start-Process $Exe -ArgumentList '--theme-cycles', '10' -PassThru }
 else { $proc = Start-Process $Exe -PassThru }
 $env:APPDATA = $oldAppData
 
@@ -101,6 +105,18 @@ try {
         } while ((Get-Date) -lt $deadline)
         $mb = Get-Mb $proc
         "Scanner x5: private memory {0:N1} MB within 10 s of the last close (budget <= {1} MB)" -f $mb, $MaxMemoryMb
+        if ($mb -gt $MaxMemoryMb) { $failed = $true; 'FAIL: memory did not return under budget' }
+    }
+    elseif ($Themes) {
+        Start-Sleep -Seconds 11   # 10 switches, 1 s apart
+        $deadline = (Get-Date).AddSeconds(10)
+        do {
+            $mb = Get-Mb $proc
+            if ($mb -le $MaxMemoryMb) { break }
+            Start-Sleep -Seconds 1
+        } while ((Get-Date) -lt $deadline)
+        $mb = Get-Mb $proc
+        "Themes x10: private memory {0:N1} MB within 10 s of the last switch (budget <= {1} MB)" -f $mb, $MaxMemoryMb
         if ($mb -gt $MaxMemoryMb) { $failed = $true; 'FAIL: memory did not return under budget' }
     }
     else {

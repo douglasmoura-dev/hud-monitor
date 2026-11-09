@@ -2,6 +2,7 @@
 
 use crate::appearance::MIN_OPACITY;
 use crate::position::{first_run_position, Point, Size, MARGIN};
+use crate::theme::ThemeId;
 use serde::{Deserialize, Serialize};
 
 /// Single source of truth for the HUD window size (the Slint literal in hud-app must match).
@@ -117,6 +118,13 @@ pub struct Profile {
     pub orientation: Orientation,
 }
 
+/// Look of the windows; `[appearance]` is missing in configs saved before themes existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Appearance {
+    #[serde(default)]
+    pub theme: ThemeId,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub hud: WindowState,
@@ -126,6 +134,8 @@ pub struct Config {
     pub thresholds: Thresholds,
     pub hotkeys: Hotkeys,
     pub autostart: bool,
+    #[serde(default)]
+    pub appearance: Appearance,
 }
 
 fn invalid(field: &'static str) -> ConfigError {
@@ -225,6 +235,7 @@ impl Config {
                 toggle_minibar: DEFAULT_TOGGLE_MINIBAR.to_owned(),
             },
             autostart: false,
+            appearance: Appearance::default(),
         }
     }
 
@@ -606,5 +617,59 @@ mod appearance_tests {
                 crit: 90.0
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+
+    const SCREEN: Size = Size {
+        width: 1920,
+        height: 1080,
+    };
+
+    fn without_appearance(c: &Config) -> String {
+        let mut skip = false;
+        let mut out = String::new();
+        for l in c.to_toml().unwrap().lines() {
+            if l.starts_with('[') {
+                skip = l.starts_with("[appearance]");
+            }
+            if !skip {
+                out.push_str(l);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn config_saved_before_themes_loads_as_gamer_hud() {
+        let c = Config::first_run(SCREEN);
+        let old = without_appearance(&c);
+        assert!(!old.contains("theme"));
+        let loaded = Config::from_toml(&old).unwrap();
+        assert_eq!(loaded.appearance.theme, ThemeId::GamerHud);
+        assert_eq!(loaded, c);
+    }
+
+    #[test]
+    fn every_theme_id_survives_a_save_and_load() {
+        for theme in ThemeId::ALL {
+            let mut c = Config::first_run(SCREEN);
+            c.appearance.theme = theme;
+            let text = c.to_toml().unwrap();
+            assert!(text.contains(&format!("theme = \"{}\"", theme.id())));
+            assert_eq!(Config::from_toml(&text).unwrap().appearance.theme, theme);
+        }
+    }
+
+    #[test]
+    fn unknown_theme_is_an_error_naming_appearance_theme() {
+        let base = without_appearance(&Config::first_run(SCREEN));
+        let text = format!("{base}\n[appearance]\ntheme = \"xyz\"\n");
+        let err = Config::from_toml(&text).unwrap_err().to_string();
+        assert!(err.contains("appearance.theme"), "{err}");
     }
 }

@@ -1,12 +1,14 @@
 //! The two Slint windows as seen by the window use case: the `WindowHost` port, dragging,
 //! placement on screen and the native look refresh.
 
-use super::{Hud, MiniBar};
+use super::{paint_hud, paint_minibar, Hud, MiniBar};
+use crate::scanner;
 use crate::shell::{effective_opacity, NativeLook};
 use crate::store::FileConfigStore;
 use crate::winffi;
 use hud_core::config::{Config, Orientation};
 use hud_core::position::{clamp_to_screen, Point, Size};
+use hud_core::theme::Palette;
 use hud_core::view::minibar_size;
 use hud_core::windowing::{WindowController, WindowHost, WindowId};
 use slint::{ComponentHandle, PhysicalPosition};
@@ -19,13 +21,15 @@ pub type Controller = WindowController<SlintWindows, FileConfigStore>;
 pub struct SlintWindows {
     hud: slint::Weak<Hud>,
     bar: slint::Weak<MiniBar>,
+    scanner: scanner::Slot,
 }
 
 impl SlintWindows {
-    pub fn new(hud: &Hud, bar: &MiniBar) -> Self {
+    pub fn new(hud: &Hud, bar: &MiniBar, scanner: scanner::Slot) -> Self {
         Self {
             hud: hud.as_weak(),
             bar: bar.as_weak(),
+            scanner,
         }
     }
 
@@ -77,6 +81,14 @@ impl WindowHost for SlintWindows {
         }
     }
 
+    fn apply_theme(&self, palette: &Palette) {
+        if let Some((hud, bar)) = self.upgrade() {
+            paint_hud(&hud, palette);
+            paint_minibar(&bar, palette);
+        }
+        scanner::apply_theme(&self.scanner, palette);
+    }
+
     fn quit(&self) {
         let _ = slint::quit_event_loop();
     }
@@ -109,6 +121,9 @@ fn place(window: &slint::Window, saved: Point, size: Size, screen: Size) {
 
 /// First paint of the window chrome from the config: opacity, pin, orientation, size, position.
 pub fn apply_config(hud: &Hud, bar: &MiniBar, config: &Config, screen: Size) {
+    let palette = config.appearance.theme.palette();
+    paint_hud(hud, &palette);
+    paint_minibar(bar, &palette);
     hud.set_bg_alpha(effective_opacity(config.hud.opacity));
     hud.set_pinned(config.hud.click_through);
     bar.set_bg_alpha(effective_opacity(config.minibar.window.opacity));
@@ -174,11 +189,17 @@ impl Looks {
         };
         let ctrl = winffi::ctrl_down();
         let config = controller.config();
+        let background = config.appearance.theme.palette().background;
         self.hud
-            .refresh(hud.window(), &config.hud, ctrl, |a| hud.set_bg_alpha(a));
-        self.bar
-            .refresh(bar.window(), &config.minibar.window, ctrl, |a| {
-                bar.set_bg_alpha(a)
+            .refresh(hud.window(), &config.hud, ctrl, background, |a| {
+                hud.set_bg_alpha(a)
             });
+        self.bar.refresh(
+            bar.window(),
+            &config.minibar.window,
+            ctrl,
+            background,
+            |a| bar.set_bg_alpha(a),
+        );
     }
 }

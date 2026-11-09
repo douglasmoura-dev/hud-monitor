@@ -26,9 +26,9 @@ enum AppError {
     Window(#[from] slint::PlatformError),
 }
 
-/// `--scanner-cycles N`: opens and closes the scanner N times (memory budget measurement).
-fn scanner_cycles() -> Option<u32> {
-    let mut args = std::env::args().skip_while(|a| a != "--scanner-cycles");
+/// Value of a `--flag N` argument.
+fn count_flag(flag: &str) -> Option<u32> {
+    let mut args = std::env::args().skip_while(|a| a != flag);
     args.nth(1)?.parse().ok()
 }
 
@@ -50,9 +50,11 @@ fn run() -> Result<(), AppError> {
         eprintln!("hud-monitor: {}", shell.notice);
         hud.set_notice(shell.notice.as_str().into());
     }
+    let palette = config.appearance.theme.palette();
     let toggle_hud_combo = config.hotkeys.toggle_hud.clone();
 
-    let windows = SlintWindows::new(&hud, &bar);
+    let scanner_slot = scanner::Slot::default();
+    let windows = SlintWindows::new(&hud, &bar, scanner_slot.clone());
     let store = store::FileConfigStore::new(path);
     let controller = Rc::new(WindowController::new(windows.clone(), store, config));
     presentation::connect(&hud, &bar, &controller);
@@ -61,12 +63,15 @@ fn run() -> Result<(), AppError> {
         controller: controller.clone(),
         looks: Rc::new(Looks::default()),
         tray: Rc::new(shell.tray),
-        scanner: scanner::Slot::default(),
+        scanner: scanner_slot,
     });
     if std::env::args().any(|a| a == "--scanner") {
-        scanner::open(&services.scanner);
+        scanner::open(&services.scanner, &palette);
     }
-    let _stress = scanner_cycles().map(|n| scanner::stress(&services.scanner, n));
+    // `--scanner-cycles N` and `--theme-cycles N` exist for the memory budget measurement.
+    let _stress =
+        count_flag("--scanner-cycles").map(|n| scanner::stress(&services.scanner, n, palette));
+    let _themes = count_flag("--theme-cycles").map(|n| runtime::cycle_themes(services.clone(), n));
 
     let (snapshots, collection) = collect::spawn();
     let (providers, poller) = ai::spawn();

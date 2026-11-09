@@ -1,21 +1,18 @@
 //! Pure rules for window appearance: opacity, backdrop and click-through styles.
 
+use crate::theme::Color;
+
 pub const MIN_OPACITY: f32 = 0.2;
 pub const WS_EX_LAYERED: u32 = 0x0008_0000;
 pub const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
-const BACKGROUND: (u8, u8, u8) = (10, 14, 20);
-
-/// CSS-like background color for an opacity (as written in the spec: `rgba(10,14,20,0.55)`).
-pub fn background_css(opacity: f32) -> String {
-    let (r, g, b) = BACKGROUND;
-    format!("rgba({r},{g},{b},{})", (opacity * 100.0).round() / 100.0)
-}
 
 /// `AABBGGRR` tint for the acrylic backdrop, same color and opacity as the solid background.
-pub fn acrylic_tint(opacity: f32) -> u32 {
-    let (r, g, b) = BACKGROUND;
+pub fn acrylic_tint(background: Color, opacity: f32) -> u32 {
     let alpha = (opacity * 255.0).round() as u32;
-    alpha << 24 | u32::from(b) << 16 | u32::from(g) << 8 | u32::from(r)
+    alpha << 24
+        | u32::from(background.b) << 16
+        | u32::from(background.g) << 8
+        | u32::from(background.r)
 }
 
 /// The window ignores the mouse only while click-through is on and Ctrl is not held.
@@ -36,16 +33,17 @@ pub fn click_through_style(current: u32, pass: bool) -> u32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn opacity_55_percent_is_rgba_10_14_20_0_55() {
-        assert_eq!(background_css(0.55), "rgba(10,14,20,0.55)");
-        assert_eq!(background_css(1.0), "rgba(10,14,20,1)");
-    }
+    const GAMER_BACKGROUND: Color = Color::rgb(0x0A0E14);
 
     #[test]
     fn acrylic_tint_keeps_color_and_opacity() {
-        assert_eq!(acrylic_tint(1.0), 0xFF14_0E0A);
-        assert_eq!(acrylic_tint(0.5) >> 24, 128);
+        assert_eq!(acrylic_tint(GAMER_BACKGROUND, 1.0), 0xFF14_0E0A);
+        assert_eq!(acrylic_tint(GAMER_BACKGROUND, 0.5) >> 24, 128);
+    }
+
+    #[test]
+    fn acrylic_tint_follows_the_theme_background() {
+        assert_eq!(acrylic_tint(Color::rgb(0xF4F6F8), 1.0), 0xFFF8_F6F4);
     }
 
     #[test]
