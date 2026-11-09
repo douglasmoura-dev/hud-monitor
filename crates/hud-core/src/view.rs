@@ -220,6 +220,7 @@ fn limit(r: &Reading, tip: &str, now: i64, t: Option<Threshold>) -> Limit {
         Reading::Official { percent, resets_at } => Limit {
             pct: Field {
                 level: t.map_or(Level::Ok, |t| level_of(*percent, t)),
+                tip: tip.to_owned(),
                 ..Field::ok(format!("{percent:.0}%"))
             },
             reset: format_reset_in(*resets_at, now),
