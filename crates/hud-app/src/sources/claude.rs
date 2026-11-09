@@ -272,16 +272,21 @@ mod tests {
         let response = |header: Option<&str>| {
             let head = header.map_or(String::new(), |v| format!("Retry-After: {v}\r\n"));
             let raw = format!("HTTP/1.1 429 Too Many Requests\r\n{head}\r\n");
-            let r: ureq::Response = raw.parse().unwrap();
-            Err(ureq::Error::Status(429, r))
+            raw.parse::<ureq::Response>().unwrap()
         };
         let limited = |retry_after| Err(ApiError::RateLimited { retry_after });
         assert_eq!(
-            read_response(response(Some("120")), "x"),
+            read_response(Err(ureq::Error::Status(429, response(Some("120")))), "x"),
             limited(Some(120))
         );
-        assert_eq!(read_response(response(None), "x"), limited(None));
-        assert_eq!(read_response(response(Some("soon")), "x"), limited(None));
+        assert_eq!(
+            read_response(Err(ureq::Error::Status(429, response(None))), "x"),
+            limited(None)
+        );
+        assert_eq!(
+            read_response(Err(ureq::Error::Status(429, response(Some("soon")))), "x"),
+            limited(None)
+        );
         assert_eq!(parse_retry_after(" 30 "), Some(30));
     }
 
