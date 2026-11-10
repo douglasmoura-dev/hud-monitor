@@ -54,7 +54,7 @@ fn run() -> Result<(), AppError> {
     let toggle_hud_combo = config.hotkeys.toggle_hud.clone();
 
     let scanner_slot = scanner::Slot::default();
-    let windows = SlintWindows::new(&hud, &bar, scanner_slot.clone());
+    let windows = SlintWindows::new(&hud, &bar, scanner_slot.clone(), screen);
     let store = store::FileConfigStore::new(path);
     let controller = Rc::new(WindowController::new(windows.clone(), store, config));
     presentation::connect(&hud, &bar, &controller);

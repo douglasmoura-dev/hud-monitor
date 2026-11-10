@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod netif;
 pub mod position;
 pub mod removal;
+pub mod scale;
 pub mod sensors;
 pub mod theme;
 pub mod ui_text;

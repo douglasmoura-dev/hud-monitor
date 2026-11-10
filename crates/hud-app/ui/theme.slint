@@ -69,6 +69,11 @@ export global Theme {
     in-out property <float> num-scale: 1;
     in-out property <float> label-scale: 1;
     in-out property <length> tracking: 1.5px;
+    // Window scale (0.6-2.0): the HUD and the mini bar multiply every length by it, per window.
+    in-out property <float> scale: 1;
+    in-out property <length> scaled-radius: radius * scale;
+    in-out property <length> scaled-cut: corner-cut * scale;
+    in-out property <length> scaled-tracking: tracking * scale;
     // Changes with the theme, so bindings that call `lb` are evaluated again on a theme switch.
     in-out property <int> theme-id: 0;
     pure callback label-text(int, string) -> string;

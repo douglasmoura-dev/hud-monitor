@@ -84,4 +84,27 @@ mod tests {
             Point { x: 0, y: 0 }
         );
     }
+
+    #[test]
+    fn a_scaled_window_near_the_edge_is_pulled_in_by_its_scaled_size() {
+        use crate::scale::scaled_size;
+        let big = scaled_size(WINDOW, 2.0);
+        assert_eq!(
+            clamp_to_screen(Point { x: 1500, y: 800 }, big, SCREEN),
+            Point { x: 1280, y: 680 }
+        );
+        // the unscaled size would have left it hanging off the screen
+        assert_eq!(
+            clamp_to_screen(Point { x: 1500, y: 800 }, WINDOW, SCREEN),
+            Point { x: 1500, y: 800 }
+        );
+    }
+
+    #[test]
+    fn a_hud_scaled_beyond_the_screen_height_pins_to_the_top() {
+        use crate::config::HUD_SIZE;
+        use crate::scale::scaled_size;
+        let p = clamp_to_screen(Point { x: 100, y: 300 }, scaled_size(HUD_SIZE, 2.0), SCREEN);
+        assert_eq!((p.x, p.y), (100, 0));
+    }
 }

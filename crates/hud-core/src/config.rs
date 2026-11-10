@@ -2,6 +2,7 @@
 
 use crate::appearance::MIN_OPACITY;
 use crate::position::{first_run_position, Point, Size, MARGIN};
+use crate::scale::{clamp_scale, DEFAULT_SCALE};
 use crate::theme::ThemeId;
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +77,18 @@ pub struct WindowState {
     pub acrylic: bool,
     #[serde(default)]
     pub click_through: bool,
+    /// Multiplies every length of the window; configs saved before resizing have none.
+    #[serde(default = "default_scale", serialize_with = "write_scale")]
+    pub scale: f32,
+}
+
+/// Writes the shortest decimal of the f32 (`0.6`, not the widened `0.6000000238418579`).
+fn write_scale<S: serde::Serializer>(scale: &f32, out: S) -> Result<S::Ok, S::Error> {
+    out.serialize_f64(scale.to_string().parse().unwrap_or(f64::from(*scale)))
+}
+
+fn default_scale() -> f32 {
+    DEFAULT_SCALE
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -203,6 +216,7 @@ impl Config {
                 visible: true,
                 acrylic: false,
                 click_through: false,
+                scale: DEFAULT_SCALE,
             },
             minibar: MiniBar {
                 window: WindowState {
@@ -212,6 +226,7 @@ impl Config {
                     visible: false,
                     acrylic: false,
                     click_through: false,
+                    scale: DEFAULT_SCALE,
                 },
                 items: vec![
                     MiniBarItem::Cpu,
@@ -326,9 +341,17 @@ impl Config {
     }
 
     pub fn from_toml(text: &str) -> Result<Config, ConfigError> {
-        let config: Config = toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let mut config: Config =
+            toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        config.press_scales_into_range();
         config.validate()?;
         Ok(config)
+    }
+
+    /// A hand-edited `scale` outside 0.6-2.0 is not an error: it is pressed into the range.
+    fn press_scales_into_range(&mut self) {
+        self.hud.scale = clamp_scale(self.hud.scale);
+        self.minibar.window.scale = clamp_scale(self.minibar.window.scale);
     }
 
     pub fn to_toml(&self) -> Result<String, ConfigError> {
@@ -671,5 +694,107 @@ mod theme_tests {
         let text = format!("{base}\n[appearance]\ntheme = \"xyz\"\n");
         let err = Config::from_toml(&text).unwrap_err().to_string();
         assert!(err.contains("appearance.theme"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    const SCREEN: Size = Size {
+        width: 1920,
+        height: 1080,
+    };
+
+    /// Replaces the `scale = ...` line of the given table (`[hud]` or `[minibar.window]`).
+    fn with_scale(c: &Config, table: &str, value: &str) -> String {
+        let mut inside = false;
+        let mut out = String::new();
+        for l in c.to_toml().unwrap().lines() {
+            if l.starts_with('[') {
+                inside = l == table;
+            }
+            if inside && l.starts_with("scale = ") {
+                out.push_str(&format!("scale = {value}\n"));
+            } else {
+                out.push_str(l);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    fn without_scale(c: &Config) -> String {
+        c.to_toml()
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with("scale = "))
+            .map(|l| format!("{l}\n"))
+            .collect()
+    }
+
+    #[test]
+    fn first_run_scale_is_one_for_both_windows() {
+        let c = Config::first_run(SCREEN);
+        assert_eq!((c.hud.scale, c.minibar.window.scale), (1.0, 1.0));
+    }
+
+    #[test]
+    fn config_saved_before_resizing_loads_at_scale_one() {
+        let c = Config::first_run(SCREEN);
+        let old = without_scale(&c);
+        assert!(!old.contains("scale"));
+        assert_eq!(Config::from_toml(&old).unwrap(), c);
+    }
+
+    #[test]
+    fn each_window_keeps_its_own_scale_through_a_save_and_load() {
+        let mut c = Config::first_run(SCREEN);
+        c.hud.scale = 1.5;
+        c.minibar.window.scale = 0.8;
+        let text = c.to_toml().unwrap();
+        assert!(text.contains("scale = 1.5") && text.contains("scale = 0.8"));
+        let loaded = Config::from_toml(&text).unwrap();
+        assert_eq!((loaded.hud.scale, loaded.minibar.window.scale), (1.5, 0.8));
+    }
+
+    #[test]
+    fn too_big_or_too_small_a_scale_loads_pressed_into_the_range() {
+        let c = Config::first_run(SCREEN);
+        let big = Config::from_toml(&with_scale(&c, "[hud]", "5.0")).unwrap();
+        assert_eq!(big.hud.scale, 2.0);
+        let small = Config::from_toml(&with_scale(&c, "[hud]", "0.1")).unwrap();
+        assert_eq!(small.hud.scale, 0.6);
+        let bar = Config::from_toml(&with_scale(&c, "[minibar.window]", "9")).unwrap();
+        assert_eq!((bar.minibar.window.scale, bar.hud.scale), (2.0, 1.0));
+    }
+
+    #[test]
+    fn the_saved_scale_is_a_short_decimal() {
+        let mut c = Config::first_run(SCREEN);
+        c.hud.scale = 0.6;
+        c.minibar.window.scale = 1.3;
+        let text = c.to_toml().unwrap();
+        assert!(
+            text.contains(
+                "scale = 0.6
+"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "scale = 1.3
+"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_scale_that_is_not_a_number_loads_as_one() {
+        let c = Config::first_run(SCREEN);
+        let nan = Config::from_toml(&with_scale(&c, "[hud]", "nan")).unwrap();
+        assert_eq!(nan.hud.scale, 1.0);
     }
 }
