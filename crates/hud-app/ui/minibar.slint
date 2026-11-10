@@ -3,29 +3,29 @@ import { CutBox } from "chrome.slint";
 
 component Chip inherits Rectangle {
     in property <ChipData> data;
-    width: 64px;
-    height: 36px;
+    width: 64px * Theme.scale;
+    height: 36px * Theme.scale;
     background: Theme.track;
-    border-radius: Theme.radius > 8px ? 8px : Theme.radius > 0px ? 4px : 0px;
+    border-radius: Theme.scaled-radius > 8px * Theme.scale ? 8px * Theme.scale : Theme.scaled-radius > 0px ? 4px * Theme.scale : 0px;
     Text {
-        y: 3px;
+        y: 3px * Theme.scale;
         width: parent.width;
         text: Theme.lb(root.data.label);
         color: Theme.dim;
         font-family: Theme.label-font;
         font-weight: 600;
-        font-size: Theme.lf(10px);
-        letter-spacing: Theme.tracking;
+        font-size: Theme.lf(10px * Theme.scale);
+        letter-spacing: Theme.scaled-tracking;
         horizontal-alignment: center;
         overflow: elide;
     }
     Text {
-        y: 16px;
+        y: 16px * Theme.scale;
         width: parent.width;
         text: root.data.field.text;
         color: root.data.field.tip == "" ? Theme.tone(root.data.field.level, Theme.teal) : Theme.dim;
         font-family: Theme.number-font;
-        font-size: Theme.nf(13px);
+        font-size: Theme.nf(13px * Theme.scale);
         horizontal-alignment: center;
         overflow: elide;
     }
@@ -40,21 +40,23 @@ export component MiniBar inherits Window {
     in property <[ChipData]> chips;
     callback moved(length, length);
     callback released();
+    callback resize(length, length, length, length);
+    callback resize-done();
     callback expand();
     callback quit();
 
     Rectangle {
-        background: Theme.corner-cut > 0px ? transparent : Theme.background.with-alpha(root.bg-alpha);
+        background: Theme.scaled-cut > 0px ? transparent : Theme.background.with-alpha(root.bg-alpha);
         border-color: Theme.border;
-        border-width: Theme.borders && Theme.corner-cut == 0px ? 1px : 0px;
-        border-radius: Theme.radius;
+        border-width: Theme.borders && Theme.scaled-cut == 0px ? 1px : 0px;
+        border-radius: Theme.scaled-radius;
         clip: true;
-        if Theme.corner-cut > 0px : CutBox {
+        if Theme.scaled-cut > 0px : CutBox {
             x: 0px;
             y: 0px;
             width: parent.width;
             height: parent.height;
-            cut: Theme.corner-cut;
+            cut: Theme.scaled-cut;
             fill: Theme.background.with-alpha(root.bg-alpha);
             line: Theme.borders ? Theme.border : transparent;
         }
@@ -64,46 +66,48 @@ export component MiniBar inherits Window {
         }
         if Theme.has-side-rule : Rectangle {
             x: 0px;
-            y: Theme.corner-cut;
-            width: 3px;
-            height: parent.height - 2 * Theme.corner-cut;
+            y: Theme.scaled-cut;
+            width: 3px * Theme.scale;
+            height: parent.height - 2 * Theme.scaled-cut;
             background: Theme.side-rule;
         }
         TouchArea { // expand to the HUD
-            x: 6px;
-            y: 6px;
-            width: root.vertical ? 30px : 20px;
-            height: root.vertical ? 20px : 18px;
+            x: 6px * Theme.scale;
+            y: 6px * Theme.scale;
+            width: root.vertical ? 30px * Theme.scale : 20px * Theme.scale;
+            height: root.vertical ? 20px * Theme.scale : 18px * Theme.scale;
             clicked => { root.expand(); }
             Rectangle {
-                x: (parent.width - 10px) / 2;
-                y: (parent.height - 10px) / 2;
-                width: 10px;
-                height: 10px;
-                border-width: 1.5px;
+                x: (parent.width - 10px * Theme.scale) / 2;
+                y: (parent.height - 10px * Theme.scale) / 2;
+                width: 10px * Theme.scale;
+                height: 10px * Theme.scale;
+                border-width: 1.5px * Theme.scale;
                 border-color: parent.has-hover ? Theme.teal : Theme.dim;
             }
         }
         TouchArea { // close
-            x: root.vertical ? 36px : 6px;
-            y: root.vertical ? 6px : 24px;
-            width: root.vertical ? 30px : 20px;
-            height: 18px;
+            x: root.vertical ? 36px * Theme.scale : 6px * Theme.scale;
+            y: root.vertical ? 6px * Theme.scale : 24px * Theme.scale;
+            width: root.vertical ? 30px * Theme.scale : 20px * Theme.scale;
+            height: 18px * Theme.scale;
             clicked => { root.quit(); }
             Path {
-                x: (parent.width - 8px) / 2;
-                y: (parent.height - 8px) / 2;
-                width: 8px;
-                height: 8px;
+                x: (parent.width - 8px * Theme.scale) / 2;
+                y: (parent.height - 8px * Theme.scale) / 2;
+                width: 8px * Theme.scale;
+                height: 8px * Theme.scale;
+                viewbox-width: 8;
+                viewbox-height: 8;
                 commands: "M 0 0 L 8 8 M 8 0 L 0 8";
                 stroke: parent.has-hover ? Theme.teal : Theme.dim;
-                stroke-width: 1.5px;
+                stroke-width: 1.5px * Theme.scale;
             }
         }
         for chip[i] in root.chips: Chip {
             data: chip;
-            x: root.vertical ? 6px : 30px + i * 68px;
-            y: root.vertical ? 30px + i * 40px : 6px;
+            x: root.vertical ? 6px * Theme.scale : 30px * Theme.scale + i * 68px * Theme.scale;
+            y: root.vertical ? 30px * Theme.scale + i * 40px * Theme.scale : 6px * Theme.scale;
         }
         if Theme.has-scanlines : Image {
             x: 0px;
@@ -113,6 +117,28 @@ export component MiniBar inherits Window {
             source: Theme.scan-tile;
             horizontal-tiling: repeat;
             vertical-tiling: repeat;
+        }
+
+        // Resize handle (12 px, not scaled): dragging it diagonally changes the window scale.
+        TouchArea {
+            x: parent.width - 12px;
+            y: parent.height - 12px;
+            width: 12px;
+            height: 12px;
+            mouse-cursor: MouseCursor.nwse-resize;
+            moved => { root.resize(root.width, root.height, self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y); }
+            pointer-event(e) => { if e.kind == PointerEventKind.up { root.resize-done(); } }
+            Path {
+                x: 0px;
+                y: 0px;
+                width: 12px;
+                height: 12px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                commands: "M 11 2 L 2 11 M 11 7 L 7 11";
+                stroke: parent.has-hover || parent.pressed ? Theme.title-text : Theme.dim;
+                stroke-width: 1px;
+            }
         }
     }
 }

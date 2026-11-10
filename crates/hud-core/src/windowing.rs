@@ -3,6 +3,7 @@
 
 use crate::config::{Config, Orientation};
 use crate::position::{Point, Size};
+use crate::scale::{scale_after_drag, scaled_size};
 use crate::theme::{Palette, ThemeId};
 use crate::view::minibar_size;
 use std::cell::{Ref, RefCell};
@@ -20,6 +21,10 @@ pub trait WindowHost {
     fn positions(&self) -> Option<(Point, Point)>;
     fn set_pinned(&self, pinned: bool);
     fn resize_minibar(&self, size: Size, vertical: bool);
+    /// Draws the window at `scale` times its base size (the mini bar also needs `resize_minibar`).
+    fn set_scale(&self, window: WindowId, scale: f32);
+    /// Pulls the window back inside the screen, using its current (scaled) size.
+    fn keep_on_screen(&self, window: WindowId);
     /// Repaints every window (HUD, mini bar, scanner) with the palette.
     fn apply_theme(&self, palette: &Palette);
     fn quit(&self);
@@ -141,10 +146,40 @@ impl<H: WindowHost, S: ConfigStore> WindowController<H, S> {
             }
             (c.minibar.items.len(), c.minibar.orientation)
         };
+        let scale = self.config.borrow().minibar.window.scale;
         self.host.resize_minibar(
-            minibar_size(count, orientation),
+            scaled_size(minibar_size(count, orientation), scale),
             orientation == Orientation::Vertical,
         );
+        self.save();
+    }
+
+    /// The resize handle moved by (`dx`, `dy`) while the window measured `size` (logical px):
+    /// applies the new scale right away. Nothing is saved until the handle is released.
+    pub fn resize_drag(&self, window: WindowId, size: (f32, f32), dx: f32, dy: f32) {
+        let (scale, bar) = {
+            let mut c = self.config.borrow_mut();
+            let state = match window {
+                WindowId::Hud => &mut c.hud,
+                WindowId::MiniBar => &mut c.minibar.window,
+            };
+            state.scale = scale_after_drag(state.scale, size, dx, dy);
+            let scale = state.scale;
+            (scale, (c.minibar.items.len(), c.minibar.orientation))
+        };
+        self.host.set_scale(window, scale);
+        if window == WindowId::MiniBar {
+            let (count, orientation) = bar;
+            self.host.resize_minibar(
+                scaled_size(minibar_size(count, orientation), scale),
+                orientation == Orientation::Vertical,
+            );
+        }
+    }
+
+    /// The resize handle was released: keeps the window on screen and saves once.
+    pub fn finish_resize(&self, window: WindowId) {
+        self.host.keep_on_screen(window);
         self.save();
     }
 
@@ -180,6 +215,7 @@ mod tests {
         calls: RefCell<Vec<String>>,
         pinned: Cell<Option<bool>>,
         resized: Cell<Option<(Size, bool)>>,
+        scaled: RefCell<Vec<(WindowId, f32)>>,
         fail_show: Cell<bool>,
         gone: Cell<bool>,
     }
@@ -221,6 +257,14 @@ mod tests {
 
         fn resize_minibar(&self, size: Size, vertical: bool) {
             self.0.resized.set(Some((size, vertical)));
+        }
+
+        fn set_scale(&self, window: WindowId, scale: f32) {
+            self.0.scaled.borrow_mut().push((window, scale));
+        }
+
+        fn keep_on_screen(&self, window: WindowId) {
+            self.note(format!("fit {window:?}"));
         }
 
         fn apply_theme(&self, palette: &Palette) {
@@ -394,5 +438,77 @@ mod tests {
         let c = WindowController::new(host.clone(), FailingStore, Config::first_run(SCREEN));
         c.save();
         assert_eq!(host.calls(), ["report could not save config: disk full"]);
+    }
+
+    const HUD_NOW: (f32, f32) = (320.0, 500.0);
+    const BAR_NOW: (f32, f32) = (124.0, 48.0);
+
+    #[test]
+    fn dragging_the_hud_handle_scales_only_the_hud_and_saves_nothing_yet() {
+        let (c, host, store) = controller();
+        c.resize_drag(WindowId::Hud, HUD_NOW, 160.0, 250.0);
+        let scaled = host.0.scaled.borrow();
+        assert_eq!(scaled.len(), 1);
+        assert_eq!(scaled[0].0, WindowId::Hud);
+        assert!((scaled[0].1 - 1.5).abs() < 1e-4);
+        assert!((c.config().hud.scale - 1.5).abs() < 1e-4);
+        assert_eq!(c.config().minibar.window.scale, 1.0);
+        assert!(host.0.resized.get().is_none());
+        assert!(store.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn dragging_the_mini_bar_handle_resizes_its_window_and_leaves_the_hud_alone() {
+        let (c, host, _) = controller();
+        c.resize_drag(WindowId::MiniBar, BAR_NOW, -24.8, -9.6);
+        let scale = c.config().minibar.window.scale;
+        assert!((scale - 0.8).abs() < 1e-4, "{scale}");
+        assert_eq!(c.config().hud.scale, 1.0);
+        let (size, vertical) = host.0.resized.get().expect("mini bar resized");
+        let config = c.config();
+        let base = minibar_size(config.minibar.items.len(), config.minibar.orientation);
+        assert_eq!(size, scaled_size(base, scale));
+        assert!(!vertical);
+        assert_eq!(host.0.scaled.borrow()[0].0, WindowId::MiniBar);
+    }
+
+    #[test]
+    fn dragging_far_outwards_stops_at_two() {
+        let (c, _, _) = controller();
+        c.resize_drag(WindowId::Hud, HUD_NOW, 5000.0, 5000.0);
+        assert_eq!(c.config().hud.scale, 2.0);
+    }
+
+    #[test]
+    fn releasing_the_handle_keeps_the_window_on_screen_and_saves_exactly_once() {
+        let (c, host, store) = controller();
+        for step in 1..=5 {
+            c.resize_drag(
+                WindowId::Hud,
+                HUD_NOW,
+                10.0 * step as f32,
+                15.0 * step as f32,
+            );
+        }
+        assert!(store.0.borrow().is_empty());
+        c.finish_resize(WindowId::Hud);
+        assert_eq!(host.calls(), ["fit Hud"]);
+        let saved = store.0.borrow();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].hud.scale, c.config().hud.scale);
+        assert!(saved[0].hud.scale > 1.0);
+    }
+
+    #[test]
+    fn a_profile_switch_keeps_the_mini_bar_scale() {
+        let (c, host, _) = controller();
+        c.resize_drag(WindowId::MiniBar, BAR_NOW, 31.0, 12.0);
+        let scale = c.config().minibar.window.scale;
+        c.switch_profile("Compact");
+        let (size, _) = host.0.resized.get().expect("resized");
+        let config = c.config();
+        let base = minibar_size(config.minibar.items.len(), config.minibar.orientation);
+        assert_eq!(size, scaled_size(base, scale));
+        assert!(scale > 1.0);
     }
 }

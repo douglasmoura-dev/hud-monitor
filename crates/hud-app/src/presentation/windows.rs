@@ -1,13 +1,14 @@
 //! The two Slint windows as seen by the window use case: the `WindowHost` port, dragging,
 //! placement on screen and the native look refresh.
 
-use super::{paint_hud, paint_minibar, Hud, MiniBar};
+use super::{paint_hud, paint_minibar, Hud, MiniBar, Theme};
 use crate::scanner;
 use crate::shell::{effective_opacity, NativeLook};
 use crate::store::FileConfigStore;
 use crate::winffi;
 use hud_core::config::{Config, Orientation};
 use hud_core::position::{clamp_to_screen, Point, Size};
+use hud_core::scale::scaled_size;
 use hud_core::theme::Palette;
 use hud_core::ui_text::PIN_TIP;
 use hud_core::view::minibar_size;
@@ -23,14 +24,16 @@ pub struct SlintWindows {
     hud: slint::Weak<Hud>,
     bar: slint::Weak<MiniBar>,
     scanner: scanner::Slot,
+    screen: Size,
 }
 
 impl SlintWindows {
-    pub fn new(hud: &Hud, bar: &MiniBar, scanner: scanner::Slot) -> Self {
+    pub fn new(hud: &Hud, bar: &MiniBar, scanner: scanner::Slot, screen: Size) -> Self {
         Self {
             hud: hud.as_weak(),
             bar: bar.as_weak(),
             scanner,
+            screen,
         }
     }
 
@@ -82,6 +85,45 @@ impl WindowHost for SlintWindows {
         }
     }
 
+    fn set_scale(&self, window: WindowId, scale: f32) {
+        match window {
+            WindowId::Hud => {
+                if let Some(hud) = self.hud.upgrade() {
+                    set_window_scale(&hud, scale);
+                }
+            }
+            WindowId::MiniBar => {
+                if let Some(bar) = self.bar.upgrade() {
+                    set_window_scale(&bar, scale);
+                }
+            }
+        }
+    }
+
+    fn keep_on_screen(&self, window: WindowId) {
+        let inside = |w: &slint::Window| {
+            let (p, s) = (w.position(), w.size());
+            let size = Size {
+                width: s.width as i32,
+                height: s.height as i32,
+            };
+            let pos = clamp_to_screen(Point { x: p.x, y: p.y }, size, self.screen);
+            w.set_position(PhysicalPosition::new(pos.x, pos.y));
+        };
+        match window {
+            WindowId::Hud => {
+                if let Some(hud) = self.hud.upgrade() {
+                    inside(hud.window());
+                }
+            }
+            WindowId::MiniBar => {
+                if let Some(bar) = self.bar.upgrade() {
+                    inside(bar.window());
+                }
+            }
+        }
+    }
+
     fn apply_theme(&self, palette: &Palette) {
         if let Some((hud, bar)) = self.upgrade() {
             paint_hud(&hud, palette);
@@ -97,6 +139,15 @@ impl WindowHost for SlintWindows {
     fn report(&self, message: &str) {
         eprintln!("hud-monitor: {message}");
     }
+}
+
+/// Sets the `Theme.scale` of one window: every length in its Slint file follows it.
+fn set_window_scale<'a, C: ComponentHandle>(window: &'a C, scale: f32)
+where
+    Theme<'a>: slint::Global<'a, C>,
+{
+    use slint::Global as _;
+    Theme::get(window).set_scale(scale);
 }
 
 /// Moves `window` by a drag delta reported in logical pixels.
@@ -130,7 +181,12 @@ pub fn apply_config(hud: &Hud, bar: &MiniBar, config: &Config, screen: Size) {
     hud.set_pin_tip(PIN_TIP.into());
     bar.set_bg_alpha(effective_opacity(config.minibar.window.opacity));
     bar.set_vertical(config.minibar.orientation == Orientation::Vertical);
-    let bar_size = minibar_size(config.minibar.items.len(), config.minibar.orientation);
+    set_window_scale(hud, config.hud.scale);
+    set_window_scale(bar, config.minibar.window.scale);
+    let bar_size = scaled_size(
+        minibar_size(config.minibar.items.len(), config.minibar.orientation),
+        config.minibar.window.scale,
+    );
     bar.window().set_size(slint::LogicalSize::new(
         bar_size.width as f32,
         bar_size.height as f32,
@@ -139,7 +195,8 @@ pub fn apply_config(hud: &Hud, bar: &MiniBar, config: &Config, screen: Size) {
         x: config.hud.x,
         y: config.hud.y,
     };
-    place(hud.window(), hud_at, hud_core::config::HUD_SIZE, screen);
+    let hud_size = scaled_size(hud_core::config::HUD_SIZE, config.hud.scale);
+    place(hud.window(), hud_at, hud_size, screen);
     let bar_at = Point {
         x: config.minibar.window.x,
         y: config.minibar.window.y,
@@ -161,6 +218,14 @@ pub fn connect(hud: &Hud, bar: &MiniBar, controller: &Rc<Controller>) {
             drag(bar.window(), dx, dy);
         }
     });
+    let c = controller.clone();
+    hud.on_resize(move |w, h, dx, dy| c.resize_drag(WindowId::Hud, (w, h), dx, dy));
+    let c = controller.clone();
+    bar.on_resize(move |w, h, dx, dy| c.resize_drag(WindowId::MiniBar, (w, h), dx, dy));
+    let c = controller.clone();
+    hud.on_resize_done(move || c.finish_resize(WindowId::Hud));
+    let c = controller.clone();
+    bar.on_resize_done(move || c.finish_resize(WindowId::MiniBar));
     let c = controller.clone();
     hud.on_released(move || c.save());
     let c = controller.clone();
