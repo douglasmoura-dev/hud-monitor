@@ -229,3 +229,12 @@ Arquivo só cresce: cada issue tem um bloco aqui, e o bloco continua mesmo depoi
 - `scripts/measure.ps1` (HUD parado, 3 min, escala 1.0): memória máx. 15,9 MB, CPU média 0,96% de um núcleo (0,24% da máquina); a escala só reavalia bindings quando muda, sem timer ou animação novos.
 - "Clicar através": a alça fica na janela, que já ignora o mouse sem Ctrl (`passes_clicks`), então só responde com Ctrl; não há código extra.
 - Não verificado: aparência de cada um dos 5 temas em 0,6 e 2,0 (nenhuma captura de tela feita nesta PR), o arrasto com "clicar através" ligado em tela, e a escala com DPI diferente de 100%.
+
+## E19 — Instalador
+- Input: `hud-monitor-setup-0.1.0.exe /VERYSILENT` sem admin → Expect: exit 0, `%LOCALAPPDATA%\hud-monitor\hud-monitor.exe`, atalho `HUD Monitor` no menu Iniciar, entrada em Aplicativos.
+- Input: desinstalar (`unins000.exe /VERYSILENT`) → Expect: exit 0, exe, atalho e entrada somem; `%APPDATA%\hud-monitor\config.toml` continua; valor `hud-monitor` em `HKCU\...\Run` removido se existir.
+- Input: instalar com o app aberto → Expect: o app é fechado e o exe é substituído sem erro.
+
+### Verificações — instalador (2026-11-11)
+- Instalar, desinstalar e reinstalar em silêncio nesta máquina: os três com exit 0; exe, atalho e entrada de desinstalação presentes/ausentes como esperado; config do usuário mantida. Instalar com o app aberto fechou e substituiu o exe.
+- Não verificado: instalação pelo assistente gráfico clicando, e em outra máquina.
