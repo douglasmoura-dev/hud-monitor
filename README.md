@@ -9,6 +9,18 @@ Monitor de sistema para Windows em estilo gamer HUD: transparente, sempre por ci
 
 Feito em Rust + Slint. Especificação em [specs/001-hud-monitor](specs/001-hud-monitor/spec.md).
 
+## Instalar
+
+Baixe `hud-monitor-setup-<versão>.exe` e execute. Instala só para o seu usuário (sem admin) em `%LOCALAPPDATA%\hud-monitor`, cria o atalho no menu Iniciar e aparece em Aplicativos para desinstalar. Desinstalar mantém suas configurações em `%APPDATA%\hud-monitor`.
+
+Para gerar o instalador (precisa do [Inno Setup 6](https://jrsoftware.org/isinfo.php): `winget install JRSoftware.InnoSetup`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scriptsuild-installer.ps1
+```
+
+O arquivo sai em `target\installer\`.
+
 ## Licença
 
 Código sob a [licença MIT](LICENSE): livre para usar, copiar, modificar e distribuir, inclusive comercialmente, mantendo o aviso de copyright.
